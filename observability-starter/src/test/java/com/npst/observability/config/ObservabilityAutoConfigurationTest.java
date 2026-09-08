@@ -4,6 +4,9 @@ import com.npst.observability.config.bank.BankResolver;
 import com.npst.observability.contract.LogIngestRequest;
 import com.npst.observability.contract.LogLevel;
 import com.npst.observability.logger.CommonLogger;
+import com.npst.observability.sink.AsyncLogSink;
+import com.npst.observability.sink.HttpLogSink;
+import com.npst.observability.sink.LogSink;
 import com.npst.observability.schema.LogEvent;
 import com.npst.observability.mapper.LogEventMapper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -38,6 +41,24 @@ class ObservabilityAutoConfigurationTest {
     void contributesNothingWhenDisabled() {
         runner.withPropertyValues("observability.enabled=false")
                 .run(context -> assertThat(context).doesNotHaveBean(CommonLogger.class));
+    }
+
+    @Test
+    void logsAreDispatchedAsynchronouslyByDefault() {
+        // Regression guard. Exposing HttpLogSink as its own bean made
+        // @ConditionalOnMissingBean(LogSink.class) match it, so the async
+        // wrapper was silently skipped and every log shipped inline on the
+        // caller's thread - the exact latency risk the async sink exists to
+        // remove. The build stayed green; only a runtime check caught it.
+        runner.run(context -> assertThat(context.getBean(LogSink.class))
+                .isInstanceOf(AsyncLogSink.class));
+    }
+
+    @Test
+    void asyncCanBeTurnedOffForSynchronousDelivery() {
+        runner.withPropertyValues("observability.sink.async.enabled=false")
+                .run(context -> assertThat(context.getBean(LogSink.class))
+                        .isInstanceOf(HttpLogSink.class));
     }
 
     @Test

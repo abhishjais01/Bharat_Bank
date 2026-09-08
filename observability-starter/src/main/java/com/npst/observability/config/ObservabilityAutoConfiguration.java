@@ -3,7 +3,6 @@ package com.npst.observability.config;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.npst.observability.client.LoggingClient;
 import com.npst.observability.client.TraceRestTemplateInterceptor;
 import com.npst.observability.config.bank.BankResolver;
 import com.npst.observability.config.bank.PropertyBankResolver;
@@ -12,6 +11,11 @@ import com.npst.observability.filter.TraceFilter;
 import com.npst.observability.interceptor.LoggingInterceptor;
 import com.npst.observability.logger.CommonLogger;
 import com.npst.observability.logger.CommonLoggerImpl;
+import com.npst.observability.masking.MetadataMasker;
+import com.npst.observability.sink.AsyncLogSink;
+import com.npst.observability.sink.HttpLogSink;
+import com.npst.observability.sink.LogSink;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -56,6 +60,12 @@ public class ObservabilityAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public MetadataMasker metadataMasker(ObservabilityProperties properties) {
+        return new MetadataMasker(properties.getMasking());
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public TraceRestTemplateInterceptor traceRestTemplateInterceptor() {
         return new TraceRestTemplateInterceptor();
     }
@@ -76,22 +86,47 @@ public class ObservabilityAutoConfiguration {
         return restTemplate -> restTemplate.getInterceptors().add(interceptor);
     }
 
+    /**
+     * The sink chain: an HTTP sink to logging-api, wrapped by default in a
+     * bounded async queue so a customer's request thread never waits on - or
+     * fails because of - the observability platform.
+     *
+     * <p>Built in one bean method on purpose. Exposing the HTTP sink as a
+     * separate bean looked tidier but was a trap: HttpLogSink <em>is</em> a
+     * LogSink, so {@code @ConditionalOnMissingBean(LogSink.class)} on the
+     * wrapper saw it and silently skipped the async layer, leaving every log
+     * shipping inline on the request thread. One bean, one type, no ambiguity
+     * - and an application overriding {@link LogSink} replaces the whole chain,
+     * which is the sane unit of replacement anyway.
+     */
     @Bean
-    @ConditionalOnMissingBean
-    public LoggingClient loggingClient(ObservabilityProperties properties,
-                                       TraceRestTemplateInterceptor interceptor,
-                                       ObjectProvider<ObjectMapper> objectMapper) {
-        return new LoggingClient(properties, interceptor, resolveMapper(objectMapper));
+    @ConditionalOnMissingBean(LogSink.class)
+    public LogSink logSink(ObservabilityProperties properties,
+                           TraceRestTemplateInterceptor interceptor,
+                           ObjectProvider<ObjectMapper> objectMapper,
+                           ObjectProvider<MeterRegistry> meterRegistry) {
+
+        MeterRegistry registry = meterRegistry.getIfAvailable();
+
+        HttpLogSink httpSink = new HttpLogSink(properties, interceptor,
+                resolveMapper(objectMapper), registry);
+
+        if (!properties.getSink().getAsync().isEnabled()) {
+            return httpSink;
+        }
+
+        return new AsyncLogSink(httpSink, properties.getSink().getAsync(), registry);
     }
 
     @Bean
     @ConditionalOnMissingBean
     public CommonLogger commonLogger(ObjectProvider<ObjectMapper> objectMapper,
                                      BankResolver bankResolver,
-                                     LoggingClient loggingClient,
+                                     LogSink logSink,
+                                     MetadataMasker masker,
                                      ObservabilityProperties properties) {
         return new CommonLoggerImpl(resolveMapper(objectMapper), bankResolver,
-                loggingClient, properties);
+                logSink, masker, properties);
     }
 
     @Bean

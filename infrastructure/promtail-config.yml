@@ -19,4 +19,4 @@ scrape_configs:
           job: observability
           service: sample-bank-app
           bank: bharat-bank
-          __path__: /var/log/bank/application.log
+          __path__: /var/log/bank/*.log

@@ -1,8 +1,11 @@
-package com.npst.observability.client;
+package com.npst.observability.sink;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.npst.observability.client.TraceRestTemplateInterceptor;
 import com.npst.observability.config.ObservabilityProperties;
 import com.npst.observability.contract.LogIngestRequest;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpEntity;
@@ -17,30 +20,31 @@ import java.util.List;
 /**
  * Ships one application log to the central logging-api over plain HTTP.
  *
- * <p>Two properties of this class matter more than what it does:
+ * <p>Two properties matter more than what it does:
  *
  * <ul>
  *   <li>It owns a private RestTemplate <em>with timeouts</em>. The starter no
- *       longer publishes a RestTemplate bean, which used to hijack the one the
- *       host application wanted, and the old instance had no timeout at all -
- *       a stalled logging-api would block bank request threads forever.</li>
- *   <li>A failure here can never surface to the caller. Logging is a
- *       side-channel; a customer's balance enquiry must succeed even when the
- *       observability platform is down.</li>
+ *       longer publishes a RestTemplate bean, and the old shared instance had
+ *       no timeout at all - a stalled logging-api would block bank request
+ *       threads indefinitely.</li>
+ *   <li>A failure can never surface to the caller, but is never silent
+ *       either. The original code swallowed every exception without logging,
+ *       so a rejected log looked identical to a delivered one.</li>
  * </ul>
- *
- * <p>Step 3 moves the send off the request thread entirely.
  */
-public class LoggingClient {
+public class HttpLogSink implements LogSink {
 
-    private static final Logger log = LoggerFactory.getLogger(LoggingClient.class);
+    private static final Logger log = LoggerFactory.getLogger(HttpLogSink.class);
 
     private final ObservabilityProperties properties;
     private final RestTemplate restTemplate;
+    private final Counter sent;
+    private final Counter failed;
 
-    public LoggingClient(ObservabilityProperties properties,
-                         TraceRestTemplateInterceptor traceInterceptor,
-                         ObjectMapper objectMapper) {
+    public HttpLogSink(ObservabilityProperties properties,
+                       TraceRestTemplateInterceptor traceInterceptor,
+                       ObjectMapper objectMapper,
+                       MeterRegistry meterRegistry) {
 
         this.properties = properties;
 
@@ -51,16 +55,22 @@ public class LoggingClient {
         this.restTemplate = new RestTemplate(factory);
         this.restTemplate.setInterceptors(List.of(traceInterceptor));
 
-        // Serialize the payload with the same ObjectMapper that writes the
-        // file log, so wire format and file format cannot drift - notably the
-        // Instant timestamp, which a default mapper emits as an epoch number
-        // rather than ISO-8601.
+        // Serialize with the same ObjectMapper that writes the file log, so
+        // wire format and file format cannot drift - notably the Instant
+        // timestamp, which a default mapper emits as an epoch number rather
+        // than ISO-8601, and logging-api would reject every line.
         this.restTemplate.getMessageConverters()
                 .removeIf(MappingJackson2HttpMessageConverter.class::isInstance);
         this.restTemplate.getMessageConverters()
                 .add(0, new MappingJackson2HttpMessageConverter(objectMapper));
+
+        this.sent = SinkMetrics.counter(meterRegistry, "sent",
+                "Logs accepted by logging-api");
+        this.failed = SinkMetrics.counter(meterRegistry, "failed",
+                "Logs rejected by logging-api or lost in transit");
     }
 
+    @Override
     public void send(LogIngestRequest request) {
 
         if (!properties.getSink().isEnabled()) {
@@ -79,10 +89,11 @@ public class LoggingClient {
 
             restTemplate.postForEntity(endpoint, new HttpEntity<>(request, headers), Void.class);
 
+            SinkMetrics.increment(sent);
+
         } catch (Exception ex) {
-            // Never propagate. Do not stay silent either - the old code
-            // swallowed everything, so a rejected log looked identical to a
-            // delivered one.
+            SinkMetrics.increment(failed);
+
             log.warn("Failed to ship log to {} : traceId={} reason={}",
                     endpoint, request.getTraceId(), ex.getMessage());
         }

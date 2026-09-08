@@ -20,3 +20,20 @@ spring:
     properties:
       hibernate:
         format_sql: true
+
+# ---------------------------------------------------------------------------
+# logging-api uses the starter for tracing and structured file logs, but must
+# never ship logs to itself - that would be an infinite loop through its own
+# ingest endpoint.
+# ---------------------------------------------------------------------------
+observability:
+
+  environment: ${OBSERVABILITY_ENVIRONMENT:DEV}
+
+  bank:
+    code: ${OBSERVABILITY_BANK_CODE:NPST}
+    name: Bharat Bank
+    region: IN
+
+  sink:
+    enabled: false

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Shared logging configuration for every service on the observability
+    platform. Include it from the service's own logback-spring.xml:
+
+        <configuration>
+            <include resource="observability-logback.xml"/>
+        </configuration>
+
+    It is deliberately NOT named logback-spring.xml. Shipping that filename
+    inside the starter jar meant every importing service silently inherited it,
+    and - because the appender wrote to a fixed relative path - two services on
+    one host appended to the same file. Concurrent writes from separate JVMs
+    interleave and corrupt lines.
+-->
+<included>
+
+    <springProperty scope="context" name="APP_NAME"
+                    source="spring.application.name" defaultValue="application"/>
+
+    <property name="LOG_PATH" value="${LOG_PATH:-logs}"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss} %-5level [%X{traceId:-no-trace}] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!--
+        One file per service, so Promtail can label by service and two JVMs on
+        one host never share a file handle.
+    -->
+    <appender name="JSON_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+
+        <file>${LOG_PATH}/${APP_NAME}.log</file>
+
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_PATH}/${APP_NAME}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>50MB</maxFileSize>
+            <!-- Operational retention. Financial-record retention is MySQL's
+                 job, not the log file's. -->
+            <maxHistory>7</maxHistory>
+            <totalSizeCap>1GB</totalSizeCap>
+        </rollingPolicy>
+
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp/>
+                <logLevel/>
+                <loggerName/>
+                <threadName/>
+                <message/>
+                <mdc/>
+            </providers>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="JSON_FILE"/>
+    </root>
+
+</included>

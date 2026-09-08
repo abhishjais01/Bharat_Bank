@@ -1,20 +1,24 @@
 package com.npst.observability.logger;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.npst.observability.client.LoggingClient;
 import com.npst.observability.config.ObservabilityProperties;
 import com.npst.observability.config.bank.BankResolver;
 import com.npst.observability.contract.EventType;
 import com.npst.observability.contract.LogLevel;
 import com.npst.observability.mapper.LogEventMapper;
+import com.npst.observability.masking.MetadataMasker;
 import com.npst.observability.schema.AuditAction;
 import com.npst.observability.schema.AuditEvent;
 import com.npst.observability.schema.ErrorEvent;
 import com.npst.observability.schema.LogEvent;
+import com.npst.observability.sink.LogSink;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import java.io.PrintWriter;
+import java.io.StringWriter;
+import java.time.Instant;
 import java.util.Map;
 
 /**
@@ -25,7 +29,11 @@ import java.util.Map;
  * service and timestamp are attached here. No controller should ever pass its
  * own bankCode or service name.
  *
- * <p>No longer a {@code @Component} - it is contributed by
+ * <p>Masking happens before the line is written anywhere, not just before it
+ * is sent. The file is tailed straight into Loki, so an unmasked OTP written
+ * to disk has already leaked.
+ *
+ * <p>Not a {@code @Component} - it is contributed by
  * {@code ObservabilityAutoConfiguration}, so it is found regardless of the
  * host application's base package.
  */
@@ -35,16 +43,19 @@ public class CommonLoggerImpl implements CommonLogger {
 
     private final ObjectMapper mapper;
     private final BankResolver bankResolver;
-    private final LoggingClient loggingClient;
+    private final LogSink sink;
+    private final MetadataMasker masker;
     private final ObservabilityProperties properties;
 
     public CommonLoggerImpl(ObjectMapper mapper,
                             BankResolver bankResolver,
-                            LoggingClient loggingClient,
+                            LogSink sink,
+                            MetadataMasker masker,
                             ObservabilityProperties properties) {
         this.mapper = mapper;
         this.bankResolver = bankResolver;
-        this.loggingClient = loggingClient;
+        this.sink = sink;
+        this.masker = masker;
         this.properties = properties;
     }
 
@@ -62,13 +73,13 @@ public class CommonLoggerImpl implements CommonLogger {
             event.setEventType(EventType.APPLICATION);
             event.setLevel(level);
             event.setMessage(message);
-            event.setMetadata(metadata);
+            event.setMetadata(masker.mask(metadata));
 
             enrich(event);
 
             write(level, event);
 
-            loggingClient.send(LogEventMapper.toIngestRequest(event));
+            sink.send(LogEventMapper.toIngestRequest(event));
 
         } catch (Exception ex) {
             log.error("Application logging failed : message={}", message, ex);
@@ -139,7 +150,7 @@ public class CommonLoggerImpl implements CommonLogger {
         event.setService(bankResolver.getServiceName());
 
         if (event.getTimestamp() == null) {
-            event.setTimestamp(java.time.Instant.now());
+            event.setTimestamp(Instant.now());
         }
     }
 
@@ -169,8 +180,8 @@ public class CommonLoggerImpl implements CommonLogger {
             return null;
         }
 
-        java.io.StringWriter writer = new java.io.StringWriter();
-        cause.printStackTrace(new java.io.PrintWriter(writer));
+        StringWriter writer = new StringWriter();
+        cause.printStackTrace(new PrintWriter(writer));
 
         return writer.toString();
     }

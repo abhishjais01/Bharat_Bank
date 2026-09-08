@@ -35,6 +35,16 @@
             <artifactId>mysql-connector-j</artifactId>
         </dependency>
 
+        <!-- The observability starter, so the central log service is itself
+             traced and produces the same structured log shape as every other
+             service. Its HTTP sink is disabled in application.yml - logging-api
+             must not post its own logs to itself. -->
+        <dependency>
+            <groupId>com.npst.observability</groupId>
+            <artifactId>observability-starter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- Validation -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
