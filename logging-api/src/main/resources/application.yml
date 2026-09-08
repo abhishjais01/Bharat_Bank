@@ -1,25 +1,66 @@
 server:
-  port: 8090
+  port: ${SERVER_PORT:8090}
 
 spring:
   application:
     name: logging-api
 
   datasource:
-    url: jdbc:mysql://localhost:3306/observability
-    username: npst
-    password: npst123
+    url: jdbc:mysql://${MYSQL_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:observability}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${MYSQL_USER:npst}
+    password: ${MYSQL_PASSWORD:npst123}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
-  jpa:
-    hibernate:
-      ddl-auto: update
+    hikari:
+      pool-name: logging-api-pool
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      # A log write must never sit waiting for a connection; the producer has
+      # already moved on and the queue behind it is bounded.
+      connection-timeout: 3000
 
-    show-sql: true
+  jpa:
+    # Flyway owns the schema. validate turns a drift between the migration and
+    # the entity into a startup failure instead of a silent runtime surprise.
+    hibernate:
+      ddl-auto: validate
+
+    open-in-view: false
+    show-sql: false
 
     properties:
       hibernate:
-        format_sql: true
+        jdbc:
+          # Ingest is one row at a time today, but the batch is set up for the
+          # bulk insert Step 5's volumes will want.
+          batch_size: 50
+        order_inserts: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # This service owns the observability database outright, so there is no
+    # pre-existing schema to baseline against.
+    baseline-on-migrate: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+
+  metrics:
+    tags:
+      application: logging-api
+
+logging:
+  level:
+    root: INFO
 
 # ---------------------------------------------------------------------------
 # logging-api uses the starter for tracing and structured file logs, but must

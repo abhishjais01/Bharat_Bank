@@ -35,6 +35,30 @@
             <artifactId>mysql-connector-j</artifactId>
         </dependency>
 
+        <!-- Flyway owns the schema. ddl-auto is validate-only: a log table in
+             a bank is not something Hibernate should be inventing at startup. -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+
+        <!-- The central log service has to be observable itself. Without this
+             there is no /health for compose to gate on and no scrape target. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
         <!-- The observability starter, so the central log service is itself
              traced and produces the same structured log shape as every other
              service. Its HTTP sink is disabled in application.yml - logging-api

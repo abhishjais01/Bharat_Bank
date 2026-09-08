@@ -1,44 +1,37 @@
 package com.npst.loggingapi.mapper;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.npst.loggingapi.dto.LogRequestDto;
 import com.npst.loggingapi.entity.ApplicationLog;
+import com.npst.observability.contract.LogIngestRequest;
 import org.springframework.stereotype.Component;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
+/**
+ * Wire contract to stored row.
+ *
+ * <p>Note the two timestamps. {@code event_time} is the producer's, carried on
+ * the request; {@code created_at} is stamped here on arrival. Keeping both is
+ * what makes a trace readable when one service's clock has drifted.
+ */
 @Component
 public class LogMapper {
 
-    private final ObjectMapper objectMapper;
+    public ApplicationLog toEntity(LogIngestRequest request) {
 
-    public LogMapper(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
+        ApplicationLog entity = new ApplicationLog();
 
-    public ApplicationLog toEntity(LogRequestDto dto) {
+        entity.setTraceId(request.getTraceId());
+        entity.setBankCode(request.getBankCode());
+        entity.setEnvironment(request.getEnvironment());
+        entity.setService(request.getService());
+        entity.setEventType(request.getEventType().name());
+        entity.setLevel(request.getLevel().name());
+        entity.setMessage(request.getMessage());
+        entity.setMetadata(request.getMetadata());
+        entity.setSchemaVersion(request.getSchemaVersion());
+        entity.setEventTime(request.getTimestamp());
+        entity.setCreatedAt(Instant.now());
 
-        ApplicationLog log = new ApplicationLog();
-
-        log.setTraceId(dto.getTraceId());
-        log.setBankCode(dto.getBankCode());
-        log.setEnvironment(dto.getEnvironment());
-        log.setService(dto.getService());
-        log.setEventType(dto.getEventType());
-        log.setLevel(dto.getLevel());
-        log.setMessage(dto.getMessage());
-
-        try {
-            log.setMetadata(
-                    objectMapper.writeValueAsString(dto.getMetadata())
-            );
-        } catch (JsonProcessingException e) {
-            log.setMetadata("{}");
-        }
-
-        log.setCreatedAt(LocalDateTime.now());
-
-        return log;
+        return entity;
     }
 }
