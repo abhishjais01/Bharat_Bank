@@ -23,16 +23,19 @@ logging:
   level:
     root: INFO
 
+# ---------------------------------------------------------------------------
+# Everything the observability platform needs from a banking microservice.
+# Note what is NOT here: observability.service. It defaults to
+# spring.application.name, so a new service names itself once.
+# ---------------------------------------------------------------------------
 observability:
 
-  # Identity stamped onto every log this service emits.
-  # serviceName is intentionally omitted - it falls back to
-  # spring.application.name, so a new microservice needs no extra config.
+  environment: ${OBSERVABILITY_ENVIRONMENT:DEV}
+
   bank:
     code: ${OBSERVABILITY_BANK_CODE:NPST}
     name: Bharat Bank
-    environment: ${OBSERVABILITY_ENVIRONMENT:DEV}
     region: IN
 
-  logging:
+  sink:
     endpoint: ${OBSERVABILITY_LOGGING_ENDPOINT:http://localhost:8090/api/v1/logs}

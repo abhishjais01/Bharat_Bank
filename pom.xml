@@ -19,6 +19,7 @@
     <packaging>pom</packaging>
 
     <modules>
+        <module>observability-contract</module>
         <module>observability-starter</module>
         <module>sample-bank-app</module>
         <module>logging-api</module>

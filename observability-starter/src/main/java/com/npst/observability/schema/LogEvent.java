@@ -1,5 +1,8 @@
 package com.npst.observability.schema;
 
+import com.npst.observability.contract.EventType;
+import com.npst.observability.contract.LogLevel;
+
 import java.time.Instant;
 import java.util.Map;
 

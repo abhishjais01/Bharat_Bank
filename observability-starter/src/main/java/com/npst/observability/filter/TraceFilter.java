@@ -1,5 +1,6 @@
 package com.npst.observability.filter;
 
+import com.npst.observability.config.ObservabilityProperties;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,10 +11,21 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.UUID;
 
+/**
+ * Establishes the correlation id for the request.
+ *
+ * <p>The id is generated once at the API gateway and travels down the call
+ * chain in a header, so this filter <em>honours</em> an inbound value and only
+ * mints one when none arrives. That is what allows a single customer journey
+ * to be reconstructed across several microservices.
+ */
 public class TraceFilter extends OncePerRequestFilter {
 
-    public static final String TRACE_ID = "traceId";
-    public static final String HEADER = "X-Trace-Id";
+    private final ObservabilityProperties properties;
+
+    public TraceFilter(ObservabilityProperties properties) {
+        this.properties = properties;
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -21,20 +33,25 @@ public class TraceFilter extends OncePerRequestFilter {
                                     FilterChain filterChain)
             throws ServletException, IOException {
 
-        String traceId = request.getHeader("X-Trace-Id");
+        String header = properties.getTrace().getHeader();
+        String mdcKey = properties.getTrace().getMdcKey();
+
+        String traceId = request.getHeader(header);
 
         if (traceId == null || traceId.isBlank()) {
             traceId = UUID.randomUUID().toString();
         }
-        request.setAttribute("traceId", traceId);
-        MDC.put("traceId", traceId);
-        //MDC.put("traceId", traceId);
-        response.setHeader("X-Trace-Id", traceId);
+
+        request.setAttribute(mdcKey, traceId);
+        MDC.put(mdcKey, traceId);
+        response.setHeader(header, traceId);
 
         try {
             filterChain.doFilter(request, response);
         } finally {
-            MDC.clear();
+            // Remove only what this filter added. MDC.clear() would also wipe
+            // keys the host application put there for its own logging.
+            MDC.remove(mdcKey);
         }
     }
 }

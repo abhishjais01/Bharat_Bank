@@ -1,5 +1,7 @@
 package com.npst.observability.schema;
 
+import com.npst.observability.contract.EventType;
+
 public class AuditEvent extends LogEvent {
 
     private String actorId;

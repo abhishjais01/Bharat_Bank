@@ -1,45 +1,28 @@
 package com.npst.observability.config.bank;
 
-import org.springframework.core.env.Environment;
-import org.springframework.stereotype.Component;
+/**
+ * Supplies the identity stamped onto every log line: which bank, which
+ * environment, which service.
+ *
+ * <p>An interface rather than a class so a deployment with a different notion
+ * of identity can replace it without forking the starter - the
+ * auto-configuration only contributes {@link PropertyBankResolver} when the
+ * application has not defined a BankResolver of its own.
+ */
+public interface BankResolver {
 
-@Component
-public class BankResolver {
+    /** Short code stamped on every log, e.g. NPST. */
+    String getCode();
 
-    private static final String UNKNOWN_SERVICE = "unknown-service";
+    /** Human readable institution name. */
+    String getName();
 
-    private final BankProperties properties;
-    private final Environment springEnvironment;
+    /** Deployment region, e.g. IN. */
+    String getRegion();
 
-    public BankResolver(BankProperties properties, Environment springEnvironment) {
-        this.properties = properties;
-        this.springEnvironment = springEnvironment;
-    }
+    /** Deployment environment: DEV, UAT, PROD. */
+    String getEnvironment();
 
-    public String getCode() {
-        return properties.getCode();
-    }
-
-    public String getName() {
-        return properties.getName();
-    }
-
-    public String getEnvironment() {
-        return properties.getEnvironment();
-    }
-
-    public String getRegion() {
-        return properties.getRegion();
-    }
-
-    public String getServiceName() {
-
-        String configured = properties.getServiceName();
-
-        if (configured != null && !configured.isBlank()) {
-            return configured;
-        }
-
-        return springEnvironment.getProperty("spring.application.name", UNKNOWN_SERVICE);
-    }
+    /** Logical name of the emitting microservice. */
+    String getServiceName();
 }
