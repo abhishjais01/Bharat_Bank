@@ -41,3 +41,25 @@ build/
 # Application logs
 logs/
 *.log
+### Client and internal reference documents - never commit
+# Bharat Bank engagement material and internal architecture notes.
+# These live locally alongside the repo; they are not platform source.
+[Bb]harat*
+NestJS_Service_Architecture_FINAL.md
+Platform_ERD_and_Communication_Flow.md
+SpringBoot_Service_Architecture_FINAL.md
+
+# Any office / diagram document dropped into the repo root
+*.docx
+*.xlsx
+*.pptx
+*.excalidraw
+~$*
+
+# Optional convention: park internal docs here and they are ignored wholesale
+docs-internal/
+
+# Local environment overrides (never commit credentials)
+.env
+.env.*
+!.env.example
