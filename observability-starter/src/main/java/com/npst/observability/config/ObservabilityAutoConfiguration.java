@@ -1,6 +1,5 @@
 package com.npst.observability.config;
 
-import com.npst.observability.client.AuditClient;
 import com.npst.observability.client.TraceRestTemplateInterceptor;
 import com.npst.observability.filter.TraceFilter;
 import com.npst.observability.interceptor.LoggingInterceptor;
@@ -15,7 +14,6 @@ import java.util.List;
 @EnableConfigurationProperties(ObservabilityProperties.class)
 public class ObservabilityAutoConfiguration {
 
-
     @Bean
     public TraceRestTemplateInterceptor traceRestTemplateInterceptor() {
         return new TraceRestTemplateInterceptor();
@@ -29,13 +27,8 @@ public class ObservabilityAutoConfiguration {
     }
 
     @Bean
-    public LoggingInterceptor loggingInterceptor(AuditClient auditClient) {
-        return new LoggingInterceptor(auditClient);
-    }
-
-    @Bean
-    public AuditClient auditClient(RestTemplate restTemplate) {
-        return new AuditClient(restTemplate);
+    public LoggingInterceptor loggingInterceptor() {
+        return new LoggingInterceptor();
     }
 
     @Bean

@@ -10,6 +10,13 @@ public class BankProperties {
     private String environment;
     private String region;
 
+    /**
+     * Logical name of the service emitting the log. When left blank the
+     * resolver falls back to {@code spring.application.name}, so a service
+     * importing the starter needs no extra configuration.
+     */
+    private String serviceName;
+
     public String getCode() {
         return code;
     }
@@ -40,5 +47,13 @@ public class BankProperties {
 
     public void setRegion(String region) {
         this.region = region;
+    }
+
+    public String getServiceName() {
+        return serviceName;
+    }
+
+    public void setServiceName(String serviceName) {
+        this.serviceName = serviceName;
     }
 }

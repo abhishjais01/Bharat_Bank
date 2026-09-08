@@ -1,3 +1,6 @@
+server:
+  port: 8080
+
 spring:
   application:
     name: sample-bank-app
@@ -11,6 +14,7 @@ management:
   endpoint:
     health:
       show-details: always
+
   metrics:
     tags:
       application: sample-bank-app
@@ -18,6 +22,17 @@ management:
 logging:
   level:
     root: INFO
+
 observability:
+
+  # Identity stamped onto every log this service emits.
+  # serviceName is intentionally omitted - it falls back to
+  # spring.application.name, so a new microservice needs no extra config.
+  bank:
+    code: ${OBSERVABILITY_BANK_CODE:NPST}
+    name: Bharat Bank
+    environment: ${OBSERVABILITY_ENVIRONMENT:DEV}
+    region: IN
+
   logging:
-    endpoint: http://localhost:8090/api/v1/logs
+    endpoint: ${OBSERVABILITY_LOGGING_ENDPOINT:http://localhost:8090/api/v1/logs}

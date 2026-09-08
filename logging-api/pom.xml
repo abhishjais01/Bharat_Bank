@@ -54,13 +54,6 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Reuse your observability starter -->
-        <dependency>
-            <groupId>com.npst.observability</groupId>
-            <artifactId>sample-bank-app</artifactId>
-            <version>1.0.0-SNAPSHOT</version>
-        </dependency>
-
     </dependencies>
 
 </project>

@@ -8,8 +8,6 @@ public class AuditEvent extends LogEvent {
     private String entity;
     private String entityId;
     private String description;
-    private String bankCode;
-    private String environment;
 
     public AuditEvent() {
         setEventType(EventType.AUDIT);
@@ -61,18 +59,5 @@ public class AuditEvent extends LogEvent {
 
     public void setDescription(String description) {
         this.description = description;
-    }
-
-    public String getBankCode() {
-        return bankCode;
-    }
-    public void setBankCode(String bankCode) {
-        this.bankCode = bankCode;
-    }
-    public String getEnvironment() {
-        return environment;
-    }
-    public void setEnvironment(String environment) {
-        this.environment = environment;
     }
 }

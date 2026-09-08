@@ -7,7 +7,11 @@ public class LogEvent {
 
     private Instant timestamp;
     private String traceId;
-    private String serviceName;
+
+    private String bankCode;
+    private String environment;
+    private String service;
+
     private EventType eventType;
     private LogLevel level;
 
@@ -38,12 +42,28 @@ public class LogEvent {
         this.traceId = traceId;
     }
 
-    public String getServiceName() {
-        return serviceName;
+    public String getBankCode() {
+        return bankCode;
     }
 
-    public void setServiceName(String serviceName) {
-        this.serviceName = serviceName;
+    public void setBankCode(String bankCode) {
+        this.bankCode = bankCode;
+    }
+
+    public String getEnvironment() {
+        return environment;
+    }
+
+    public void setEnvironment(String environment) {
+        this.environment = environment;
+    }
+
+    public String getService() {
+        return service;
+    }
+
+    public void setService(String service) {
+        this.service = service;
     }
 
     public EventType getEventType() {
