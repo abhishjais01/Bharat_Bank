@@ -3,6 +3,7 @@ package com.npst.observability.sink;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.npst.observability.client.TraceRestTemplateInterceptor;
 import com.npst.observability.config.ObservabilityProperties;
+import com.npst.observability.contract.AuditIngestRequest;
 import com.npst.observability.contract.LogIngestRequest;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -72,14 +73,17 @@ public class HttpLogSink implements LogSink {
 
     @Override
     public void send(LogIngestRequest request) {
+        post(properties.getSink().getEndpoint(), request, request.getTraceId(), "log");
+    }
 
-        if (!properties.getSink().isEnabled()) {
-            return;
-        }
+    @Override
+    public void sendAudit(AuditIngestRequest request) {
+        post(properties.getSink().getAuditEndpoint(), request, request.getTraceId(), "audit");
+    }
 
-        String endpoint = properties.getSink().getEndpoint();
+    private void post(String endpoint, Object payload, String traceId, String kind) {
 
-        if (endpoint == null || endpoint.isBlank()) {
+        if (!properties.getSink().isEnabled() || endpoint == null || endpoint.isBlank()) {
             return;
         }
 
@@ -87,15 +91,17 @@ public class HttpLogSink implements LogSink {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
-            restTemplate.postForEntity(endpoint, new HttpEntity<>(request, headers), Void.class);
+            restTemplate.postForEntity(endpoint, new HttpEntity<>(payload, headers), Void.class);
 
             SinkMetrics.increment(sent);
 
         } catch (Exception ex) {
             SinkMetrics.increment(failed);
 
-            log.warn("Failed to ship log to {} : traceId={} reason={}",
-                    endpoint, request.getTraceId(), ex.getMessage());
+            // Never propagate, never stay silent. The original code swallowed
+            // everything, so a rejected record looked like a delivered one.
+            log.warn("Failed to ship {} to {} : traceId={} reason={}",
+                    kind, endpoint, traceId, ex.getMessage());
         }
     }
 }

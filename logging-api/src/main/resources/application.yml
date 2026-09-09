@@ -35,12 +35,25 @@ spring:
           batch_size: 50
         order_inserts: true
 
+  data:
+    web:
+      pageable:
+        default-page-size: 50
+        # Capped so one careless client cannot ask for a million rows and take
+        # the log service down for everyone.
+        max-page-size: 200
+
   flyway:
     enabled: true
     locations: classpath:db/migration
     # This service owns the observability database outright, so there is no
     # pre-existing schema to baseline against.
     baseline-on-migrate: false
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: method
 
 management:
   endpoints:

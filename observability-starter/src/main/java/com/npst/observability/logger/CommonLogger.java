@@ -44,6 +44,15 @@ public interface CommonLogger {
                String entityId,
                String description);
 
+    /**
+     * Records a fully populated audit event.
+     *
+     * <p>The overloads above cover the simple "who did what" case. This one is
+     * for callers - the {@code @LogRegistry} aspect in particular - that also
+     * know the channel, the API call, the amount and the outcome.
+     */
+    void audit(com.npst.observability.schema.AuditEvent event);
+
     /** Records a failure together with its stack trace. */
     void error(String message, Exception cause);
 }

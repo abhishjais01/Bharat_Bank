@@ -1,6 +1,7 @@
 package com.npst.observability.sink;
 
 import com.npst.observability.config.ObservabilityProperties;
+import com.npst.observability.contract.AuditIngestRequest;
 import com.npst.observability.contract.LogIngestRequest;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -45,7 +46,9 @@ public class AsyncLogSink implements LogSink, DisposableBean {
 
     private final LogSink delegate;
     private final ObservabilityProperties.Async config;
-    private final BlockingQueue<LogIngestRequest> queue;
+    // Holds both payload kinds; the worker dispatches on type. One queue
+    // rather than two keeps the bound on total memory honest.
+    private final BlockingQueue<Object> queue;
     private final ExecutorService workers;
     private final AtomicBoolean running = new AtomicBoolean(true);
 
@@ -74,6 +77,15 @@ public class AsyncLogSink implements LogSink, DisposableBean {
 
     @Override
     public void send(LogIngestRequest request) {
+        enqueue(request);
+    }
+
+    @Override
+    public void sendAudit(AuditIngestRequest request) {
+        enqueue(request);
+    }
+
+    private void enqueue(Object request) {
 
         SinkMetrics.increment(submitted);
 
@@ -100,10 +112,14 @@ public class AsyncLogSink implements LogSink, DisposableBean {
 
         while (running.get() || !queue.isEmpty()) {
             try {
-                LogIngestRequest request = queue.poll(200, TimeUnit.MILLISECONDS);
+                Object item = queue.poll(200, TimeUnit.MILLISECONDS);
 
-                if (request != null) {
-                    delegate.send(request);
+                switch (item) {
+                    case LogIngestRequest request -> delegate.send(request);
+                    case AuditIngestRequest request -> delegate.sendAudit(request);
+                    case null -> { }
+                    default -> log.warn("Unknown payload on the log queue : {}",
+                            item.getClass().getName());
                 }
 
             } catch (InterruptedException ex) {

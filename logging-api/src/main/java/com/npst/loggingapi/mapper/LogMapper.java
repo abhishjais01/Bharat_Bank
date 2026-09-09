@@ -24,6 +24,8 @@ public class LogMapper {
         entity.setBankCode(request.getBankCode());
         entity.setEnvironment(request.getEnvironment());
         entity.setService(request.getService());
+        entity.setCustomerId(request.getCustomerId());
+        entity.setChannel(request.getChannel());
         entity.setEventType(request.getEventType().name());
         entity.setLevel(request.getLevel().name());
         entity.setMessage(request.getMessage());

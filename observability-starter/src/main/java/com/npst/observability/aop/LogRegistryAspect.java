@@ -4,6 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.npst.observability.contract.LogLevel;
 import com.npst.observability.logger.CommonLogger;
 import com.npst.observability.model.ActorType;
+import com.npst.observability.schema.AuditEvent;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import com.npst.observability.context.AuditContext;
 import com.npst.observability.context.RequestContext;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -62,8 +68,13 @@ public class LogRegistryAspect {
         } finally {
             long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
 
+            // Drained here, not inside record(), so it is cleared even if
+            // recording itself fails. A leftover amount attaching to the next
+            // unrelated transaction on this thread would be worse than none.
+            AuditContext.Details contributed = AuditContext.drain();
+
             try {
-                record(joinPoint, logRegistry, result, failure, durationMs);
+                record(joinPoint, logRegistry, result, failure, durationMs, contributed);
             } catch (Exception loggingFailure) {
                 log.warn("@LogRegistry could not record {} : {}",
                         logRegistry.action(), loggingFailure.getMessage());
@@ -75,7 +86,8 @@ public class LogRegistryAspect {
                         LogRegistry annotation,
                         Object result,
                         Throwable failure,
-                        long durationMs) {
+                        long durationMs,
+                        AuditContext.Details contributed) {
 
         boolean failed = failure != null;
 
@@ -121,23 +133,84 @@ public class LogRegistryAspect {
                 metadata);
 
         if (annotation.audit()) {
-            writeAudit(annotation, failed);
+            writeAudit(annotation, failed, failure, statusCode, durationMs, contributed);
         }
     }
 
-    private void writeAudit(LogRegistry annotation, boolean failed) {
+    /**
+     * Builds the audit record. Everything the annotation cannot know - who the
+     * actor was, which endpoint was called, what the system answered, how long
+     * it took - is filled in from the request context and this execution.
+     */
+    private void writeAudit(LogRegistry annotation,
+                            boolean failed,
+                            Throwable failure,
+                            Integer statusCode,
+                            long durationMs,
+                            AuditContext.Details contributed) {
 
-        commonLogger.audit(
-                // The customer the request acts for, captured at the edge.
-                // SYSTEM covers scheduled jobs and internal calls.
-                orDefault(RequestContext.customerId(), "SYSTEM"),
-                RequestContext.customerId() == null
-                        ? ActorType.SYSTEM.name()
-                        : ActorType.CUSTOMER.name(),
-                annotation.action(),
-                annotation.entity().isBlank() ? annotation.module() : annotation.entity(),
-                null,
-                annotation.action() + (failed ? " failed" : " completed"));
+        AuditEvent event = new AuditEvent();
+
+        // The header wins; a method can supply the customer when the call did
+        // not arrive with one, such as a login that resolves it mid-flight.
+        String customerId = RequestContext.customerId() != null
+                ? RequestContext.customerId()
+                : contributed == null ? null : contributed.getCustomerId();
+
+        // SYSTEM covers scheduled jobs and internal service-to-service calls,
+        // which have no customer acting behind them.
+        event.setActorId(orDefault(customerId, ActorType.SYSTEM.name()));
+        event.setActorType(customerId == null
+                ? ActorType.SYSTEM.name()
+                : ActorType.CUSTOMER.name());
+
+        event.setAction(annotation.action());
+        event.setModule(annotation.module());
+        event.setEntity(annotation.entity().isBlank()
+                ? annotation.module()
+                : annotation.entity());
+        event.setDescription(annotation.action() + (failed ? " failed" : " completed"));
+
+        event.setStatusCode(statusCode);
+        event.setResponseMessage(failed ? failure.getMessage() : null);
+        event.setDurationMs(durationMs);
+
+        HttpServletRequest request = currentRequest();
+
+        if (request != null) {
+            event.setApiEndpoint(request.getRequestURI());
+            event.setApiMethod(request.getMethod());
+        }
+
+        if (contributed != null) {
+            event.setEntityId(contributed.getEntityId());
+            event.setAmount(contributed.getAmount());
+            event.setCurrency(contributed.getCurrency());
+            event.setBusinessRef(contributed.getBusinessRef());
+            event.setMobileNumber(contributed.getMobileNumber());
+            event.setBusinessContext(contributed.getBusinessContext());
+            event.setBeforeState(contributed.getBeforeState());
+            event.setAfterState(contributed.getAfterState());
+
+            if (event.getCustomerId() == null) {
+                event.setCustomerId(contributed.getCustomerId());
+            }
+        }
+
+        commonLogger.audit(event);
+    }
+
+    /**
+     * The servlet request for this call, when there is one. A scheduled job or
+     * an async worker has none, and that is not an error.
+     */
+    private static HttpServletRequest currentRequest() {
+
+        RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+
+        return attributes instanceof ServletRequestAttributes servlet
+                ? servlet.getRequest()
+                : null;
     }
 
     /**

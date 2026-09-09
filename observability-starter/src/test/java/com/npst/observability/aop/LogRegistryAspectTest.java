@@ -9,6 +9,8 @@ import com.npst.observability.logger.CommonLogger;
 import com.npst.observability.logger.CommonLoggerImpl;
 import com.npst.observability.masking.MetadataMasker;
 import com.npst.observability.sink.LogSink;
+import com.npst.observability.sink.RecordingLogSink;
+import com.npst.observability.contract.AuditIngestRequest;
 import org.aspectj.lang.annotation.Aspect;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -28,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 class LogRegistryAspectTest {
 
-    private final List<LogIngestRequest> shipped = new CopyOnWriteArrayList<>();
+    private final RecordingLogSink sink = new RecordingLogSink();
 
     private final BankingService service = proxy();
 
@@ -126,20 +128,64 @@ class LogRegistryAspectTest {
     void aBrokenLoggerNeverBreaksTheBankingCall() {
 
         BankingService fragile = proxyWith(new CommonLoggerImpl(
-                new ObjectMapper(), null, request -> { }, null,
-                new ObservabilityProperties()) {
-        });
+                new ObjectMapper(), null, new RecordingLogSink(), null,
+                new ObservabilityProperties()));
 
         // BankResolver and masker are null, so recording blows up internally.
         // The transfer must still succeed.
         assertThat(fragile.transfer("TXN-005")).isEqualTo("processed TXN-005");
     }
 
+    @Test
+    void anAuditedActionProducesAnAuditRecordWithTheRuntimeDetail() {
+
+        RequestContext.put(RequestContext.CUSTOMER_ID, "CIF-99001");
+        RequestContext.put(RequestContext.CHANNEL, "MOBILE");
+
+        service.auditedTransfer("TXN-100");
+
+        assertThat(sink.audits).hasSize(1);
+
+        AuditIngestRequest audit = sink.lastAudit();
+
+        // constant, from the annotation
+        assertThat(audit.getAction()).isEqualTo("FUND_TRANSFER");
+        assertThat(audit.getModule()).isEqualTo("PAYMENTS");
+        assertThat(audit.getEntity()).isEqualTo("TRANSFER");
+
+        // runtime, from the execution and the request context
+        assertThat(audit.getActorId()).isEqualTo("CIF-99001");
+        assertThat(audit.getActorType()).isEqualTo("CUSTOMER");
+        assertThat(audit.getChannel()).isEqualTo("MOBILE");
+        assertThat(audit.getCustomerId()).isEqualTo("CIF-99001");
+        assertThat(audit.getDurationMs()).isNotNull();
+        assertThat(audit.getDescription()).isEqualTo("FUND_TRANSFER completed");
+    }
+
+    @Test
+    void anUnauditedActionProducesNoAuditRecord() {
+        // A balance enquiry is an application log, not something a regulator
+        // asks about. Auditing everything is how an audit trail becomes noise.
+        service.transfer("TXN-101");
+
+        assertThat(sink.audits).isEmpty();
+        assertThat(sink.logs).isNotEmpty();
+    }
+
+    @Test
+    void withNoCustomerInContextTheActorIsSystem() {
+
+        service.auditedTransfer("TXN-102");
+
+        assertThat(sink.lastAudit().getActorId()).isEqualTo("SYSTEM");
+        assertThat(sink.lastAudit().getActorType()).isEqualTo("SYSTEM");
+    }
+
     // ---------------------------------------------------------------- setup
 
     private LogIngestRequest last() {
-        assertThat(shipped).isNotEmpty();
-        return shipped.get(shipped.size() - 1);
+        assertThat(sink.logs).isNotEmpty();
+        return sink.lastLog();
     }
 
     @SuppressWarnings("unchecked")
@@ -152,12 +198,10 @@ class LogRegistryAspectTest {
         ObservabilityProperties properties = new ObservabilityProperties();
         properties.getBank().setCode("NPST");
 
-        LogSink capturing = shipped::add;
-
         CommonLogger logger = new CommonLoggerImpl(
                 new ObjectMapper(),
                 new StubResolver(),
-                capturing,
+                sink,
                 new MetadataMasker(properties.getMasking()),
                 properties);
 
@@ -181,6 +225,12 @@ class LogRegistryAspectTest {
         @LogRegistry(action = "FUND_TRANSFER", module = "PAYMENTS")
         public String failingTransfer() {
             throw new IllegalStateException("insufficient funds");
+        }
+
+        @LogRegistry(action = "FUND_TRANSFER", module = "PAYMENTS",
+                entity = "TRANSFER", audit = true)
+        public String auditedTransfer(String reference) {
+            return "processed " + reference;
         }
 
         @LogRegistry(action = "ADD_BENEFICIARY", module = "PAYMENTS", logArguments = true)

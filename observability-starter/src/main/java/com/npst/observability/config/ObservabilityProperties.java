@@ -137,8 +137,14 @@ public class ObservabilityProperties {
          */
         private boolean enabled = true;
 
-        /** Absolute URL of the logging-api ingest endpoint. */
+        /** Absolute URL of the logging-api application log endpoint. */
         private String endpoint;
+
+        /**
+         * Absolute URL of the audit endpoint. Separate because audit lands in a
+         * different table with different retention and different grants.
+         */
+        private String auditEndpoint;
 
         /**
          * Deliberately short. Logging must never become the reason a customer
@@ -165,6 +171,14 @@ public class ObservabilityProperties {
 
         public void setEndpoint(String endpoint) {
             this.endpoint = endpoint;
+        }
+
+        public String getAuditEndpoint() {
+            return auditEndpoint;
+        }
+
+        public void setAuditEndpoint(String auditEndpoint) {
+            this.auditEndpoint = auditEndpoint;
         }
 
         public Duration getConnectTimeout() {

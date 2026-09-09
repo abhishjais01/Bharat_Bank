@@ -6,8 +6,10 @@ import com.npst.observability.config.bank.BankResolver;
 import com.npst.observability.contract.EventType;
 import com.npst.observability.context.RequestContext;
 import com.npst.observability.contract.LogLevel;
+import com.npst.observability.mapper.AuditEventMapper;
 import com.npst.observability.mapper.LogEventMapper;
 import com.npst.observability.masking.MetadataMasker;
+import com.npst.observability.util.MaskingUtil;
 import com.npst.observability.schema.AuditAction;
 import com.npst.observability.schema.AuditEvent;
 import com.npst.observability.schema.ErrorEvent;
@@ -107,29 +109,58 @@ public class CommonLoggerImpl implements CommonLogger {
                       String entityId,
                       String description) {
 
-        try {
-            AuditEvent event = new AuditEvent();
+        AuditEvent event = new AuditEvent();
 
-            event.setActorId(actorId);
-            event.setActorType(actorType);
-            event.setAction(action);
-            event.setEntity(entity);
-            event.setEntityId(entityId);
-            event.setDescription(description);
-            event.setMessage(description);
+        event.setActorId(actorId);
+        event.setActorType(actorType);
+        event.setAction(action);
+        event.setEntity(entity);
+        event.setEntityId(entityId);
+        event.setDescription(description);
+
+        audit(event);
+    }
+
+    @Override
+    public void audit(AuditEvent event) {
+
+        try {
             event.setLevel(LogLevel.INFO);
+
+            if (event.getMessage() == null) {
+                event.setMessage(event.getDescription());
+            }
 
             enrich(event);
 
+            // Order matters. The wire copy is taken first and carries identity
+            // intact - the audit table is a compliance record, and a regulator
+            // asking who moved money cannot work with XXXXXXXX5510.
+            sink.sendAudit(AuditEventMapper.toIngestRequest(event));
+
+            // The file copy is then masked. It is tailed straight into Loki,
+            // which has no access control of its own, so unmasked identity must
+            // not reach it. Same event, two audiences, two rules.
+            maskForFile(event);
+
             write(LogLevel.INFO, event);
 
-            // Deliberately not shipped to logging-api. Layer 1 persists
-            // application logs only; audit gets its own immutable table in
-            // Layer 2. Until then audit events reach Loki through the file.
-
         } catch (Exception ex) {
-            log.error("Audit logging failed : action={}", action, ex);
+            log.error("Audit logging failed : action={}", event.getAction(), ex);
         }
+    }
+
+    /**
+     * Scrubs the copy that goes to disk. The mapper has already taken an
+     * unmasked snapshot for the audit table, so mutating the event here is safe.
+     */
+    private void maskForFile(AuditEvent event) {
+
+        event.setMobileNumber(MaskingUtil.maskMobile(event.getMobileNumber()));
+        event.setMetadata(masker.mask(event.getMetadata()));
+        event.setBusinessContext(masker.mask(event.getBusinessContext()));
+        event.setBeforeState(masker.mask(event.getBeforeState()));
+        event.setAfterState(masker.mask(event.getAfterState()));
     }
 
     @Override

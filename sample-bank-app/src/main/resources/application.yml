@@ -39,3 +39,4 @@ observability:
 
   sink:
     endpoint: ${OBSERVABILITY_LOGGING_ENDPOINT:http://localhost:8090/api/v1/logs}
+    audit-endpoint: ${OBSERVABILITY_AUDIT_ENDPOINT:http://localhost:8090/api/v1/audit}

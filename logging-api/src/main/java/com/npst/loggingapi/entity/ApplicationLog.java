@@ -39,6 +39,17 @@ public class ApplicationLog {
     @Column(name = "service", nullable = false, length = 64)
     private String service;
 
+    /**
+     * The two context fields support genuinely filters on. Device and IP are
+     * diagnostic detail and stay in metadata - this is the high-volume table
+     * and a column costs storage on every row.
+     */
+    @Column(name = "customer_id", length = 64)
+    private String customerId;
+
+    @Column(name = "channel", length = 16)
+    private String channel;
+
     @Column(name = "event_type", nullable = false, length = 16)
     private String eventType;
 
@@ -107,6 +118,22 @@ public class ApplicationLog {
 
     public void setService(String service) {
         this.service = service;
+    }
+
+    public String getCustomerId() {
+        return customerId;
+    }
+
+    public void setCustomerId(String customerId) {
+        this.customerId = customerId;
+    }
+
+    public String getChannel() {
+        return channel;
+    }
+
+    public void setChannel(String channel) {
+        this.channel = channel;
     }
 
     public String getEventType() {

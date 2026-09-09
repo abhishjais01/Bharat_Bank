@@ -26,10 +26,10 @@ class AsyncLogSinkTest {
         CountDownLatch delivered = new CountDownLatch(3);
         List<LogIngestRequest> received = new CopyOnWriteArrayList<>();
 
-        LogSink downstream = request -> {
-            received.add(request);
+        LogSink downstream = RecordingLogSink.behaving(request -> {
+            received.add((LogIngestRequest) request);
             delivered.countDown();
-        };
+        });
 
         AsyncLogSink sink = new AsyncLogSink(downstream, asyncConfig(100),
                 new SimpleMeterRegistry());
@@ -48,13 +48,13 @@ class AsyncLogSinkTest {
     void aSlowDownstreamDoesNotSlowTheCaller() throws Exception {
 
         // Downstream takes 200ms per log - roughly a struggling logging-api.
-        LogSink slow = request -> {
+        LogSink slow = RecordingLogSink.behaving(request -> {
             try {
                 Thread.sleep(200);
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
             }
-        };
+        });
 
         AsyncLogSink sink = new AsyncLogSink(slow, asyncConfig(100),
                 new SimpleMeterRegistry());
@@ -81,13 +81,13 @@ class AsyncLogSinkTest {
         // Downstream that never completes, so the queue fills and stays full.
         CountDownLatch blocked = new CountDownLatch(1);
 
-        LogSink stuck = request -> {
+        LogSink stuck = RecordingLogSink.behaving(request -> {
             try {
                 blocked.await();
             } catch (InterruptedException ex) {
                 Thread.currentThread().interrupt();
             }
-        };
+        });
 
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         AsyncLogSink sink = new AsyncLogSink(stuck, asyncConfig(4), registry);
@@ -111,9 +111,9 @@ class AsyncLogSinkTest {
     @Test
     void aFailingDownstreamNeverReachesTheCaller() throws Exception {
 
-        LogSink exploding = request -> {
+        LogSink exploding = RecordingLogSink.behaving(request -> {
             throw new IllegalStateException("logging-api is down");
-        };
+        });
 
         AsyncLogSink sink = new AsyncLogSink(exploding, asyncConfig(10),
                 new SimpleMeterRegistry());
