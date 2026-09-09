@@ -126,7 +126,7 @@ public class LogRegistryAspect {
 
         // Masking happens inside CommonLogger, so anything sensitive that came
         // in through arguments or the result is scrubbed before it is written.
-        LogLevel level = failed ? LogLevel.ERROR : annotation.level();
+        LogLevel level = failed ? failureLevel(annotation, failure) : annotation.level();
 
         commonLogger.logApplication(level,
                 annotation.action() + (failed ? " failed" : " completed"),
@@ -211,6 +211,22 @@ public class LogRegistryAspect {
         return attributes instanceof ServletRequestAttributes servlet
                 ? servlet.getRequest()
                 : null;
+    }
+
+    /**
+     * A refused request is not a broken system. Anything the method declared in
+     * warnOn is a business rejection and lands at WARN; everything else is a
+     * genuine fault and lands at ERROR.
+     */
+    private static LogLevel failureLevel(LogRegistry annotation, Throwable failure) {
+
+        for (Class<? extends Throwable> businessFailure : annotation.warnOn()) {
+            if (businessFailure.isInstance(failure)) {
+                return LogLevel.WARN;
+            }
+        }
+
+        return LogLevel.ERROR;
     }
 
     /**

@@ -91,3 +91,14 @@ observability:
 
   sink:
     enabled: false
+
+  # -------------------------------------------------------------------------
+  # Retention. Scoped to application_logs only - audit_logs is never purged
+  # here, and the append-only triggers would refuse the DELETE regardless.
+  # Off by default: how long a bank keeps its logs is the bank's decision.
+  # -------------------------------------------------------------------------
+  retention:
+    enabled: ${LOG_RETENTION_ENABLED:false}
+    period: ${LOG_RETENTION_PERIOD:P90D}
+    cron: "0 30 2 * * *"
+    batch-size: 5000

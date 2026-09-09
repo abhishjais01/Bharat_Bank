@@ -1,0 +1,161 @@
+{
+  "uid": "layer1-logging",
+  "title": "Layer 1 - Application Logging",
+  "tags": ["observability", "layer1"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": { "type": "loki", "uid": "loki" },
+        "query": "label_values(service)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "level",
+        "label": "Level",
+        "type": "custom",
+        "query": "INFO,WARN,ERROR,DEBUG",
+        "includeAll": true,
+        "multi": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Log volume by level",
+      "description": "A WARN spike is usually customers being refused - limits, funds, beneficiaries. An ERROR spike is usually the platform or CBS.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (event_level) (count_over_time({job=\"observability\", service=~\"$service\"} [$__auto]))",
+          "legendFormat": "{{event_level}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 20, "stacking": { "mode": "normal" } } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "ERROR" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] },
+          { "matcher": { "id": "byName", "options": "WARN" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+          { "matcher": { "id": "byName", "options": "INFO" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Errors in window",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({job=\"observability\", event_level=\"ERROR\", service=~\"$service\"} [$__range]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Logs dropped by the pipeline",
+      "description": "Should be zero. Anything above it means the async queue is saturated and lines are being discarded on purpose - the platform staying up rather than taking the bank down with it.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 4 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(observability_logs_dropped_total[$__range]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Log pipeline health",
+      "description": "sent against failed. A gap between submitted and sent means logging-api is rejecting or unreachable.",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(observability_logs_submitted_total[5m]))", "legendFormat": "submitted" },
+        { "refId": "B", "expr": "sum(rate(observability_logs_sent_total[5m]))", "legendFormat": "sent" },
+        { "refId": "C", "expr": "sum(rate(observability_logs_failed_total[5m]))", "legendFormat": "failed" },
+        { "refId": "D", "expr": "sum(rate(observability_logs_dropped_total[5m]))", "legendFormat": "dropped" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Traffic by channel",
+      "description": "Captured at the edge from X-Channel - mobile, web, branch, ATM.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (channel) (count_over_time({job=\"observability\", service=~\"$service\"} [$__auto]))",
+          "legendFormat": "{{channel}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "logs",
+      "title": "Live logs",
+      "description": "Paste a trace id into the search box to follow one customer journey across every service.",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 16 },
+      "options": {
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{job=\"observability\", service=~\"$service\", event_level=~\"$level\"}"
+        }
+      ]
+    }
+  ]
+}

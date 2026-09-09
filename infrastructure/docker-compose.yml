@@ -1,69 +1,186 @@
-version: "3.9"
+# The whole platform, from nothing to a working dashboard:
+#
+#     docker compose up -d --build
+#
+# Run from this directory. The build context is the repository root, because
+# the application images build the multi-module project from source.
+
+name: bank-observability
 
 services:
 
-  loki:
-    image: grafana/loki:latest
-    container_name: loki
-
-    ports:
-      - "3100:3100"
-
-    command: -config.file=/etc/loki/loki-config.yml
-
-    volumes:
-      - ./loki-config.yml:/etc/loki/loki-config.yml
-
-  promtail:
-    image: grafana/promtail:latest
-    container_name: promtail
-
-    command: -config.file=/etc/promtail/promtail-config.yml
-
-    volumes:
-      - ../logs:/var/log/bank
-      - ./promtail-config.yml:/etc/promtail/promtail-config.yml
-
-    depends_on:
-      - loki
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-
-    ports:
-      - "9090:9090"
-
-    volumes:
-      - ./prometheus.yml:/etc/prometheus/prometheus.yml
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
-
-  grafana:
-    image: grafana/grafana-oss:latest
-    container_name: grafana
-
-    ports:
-      - "3000:3000"
-
-    depends_on:
-      - prometheus
+  # --------------------------------------------------------------- storage --
 
   mysql:
     image: mysql:8.4
     container_name: mysql
 
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: observability
-      MYSQL_USER: npst
-      MYSQL_PASSWORD: npst123
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-observability}
+      MYSQL_USER: ${MYSQL_USER:-npst}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-npst123}
+
+    # V2 creates the append-only audit triggers, and MySQL 8 refuses
+    # CREATE TRIGGER from a non-SUPER user while binary logging is on.
+    command: --log-bin-trust-function-creators=1
 
     ports:
       - "3306:3306"
 
     volumes:
       - mysql_data:/var/lib/mysql
+
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root",
+             "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+    restart: unless-stopped
+
+  # ------------------------------------------------------------ log search --
+
+  loki:
+    image: grafana/loki:3.1.1
+    container_name: loki
+
+    command: -config.file=/etc/loki/loki-config.yml
+
+    ports:
+      - "3100:3100"
+
+    volumes:
+      - ./loki-config.yml:/etc/loki/loki-config.yml:ro
+      # Without this the chunks, WAL and index live in the container's writable
+      # layer and every log is lost on recreate.
+      - loki_data:/loki
+
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.1.1
+    container_name: promtail
+
+    command: -config.file=/etc/promtail/promtail-config.yml
+
+    volumes:
+      - app_logs:/var/log/bank:ro
+      - ./promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      # Keeps read positions across restarts, so a restart does not re-ship
+      # every line already in Loki.
+      - promtail_positions:/tmp
+
+    depends_on:
+      - loki
+
+    restart: unless-stopped
+
+  # -------------------------------------------------------------- metrics --
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: prometheus
+
+    ports:
+      - "9090:9090"
+
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:11.2.0
+    container_name: grafana
+
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+    ports:
+      - "3000:3000"
+
+    volumes:
+      # Datasources and dashboards are provisioned from the repository, so a
+      # fresh stack comes up already wired - no clicking through the UI, and
+      # nothing lost when the container is recreated.
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+
+    depends_on:
+      - loki
+      - prometheus
+
+    restart: unless-stopped
+
+  # ---------------------------------------------------------- the platform --
+
+  logging-api:
+    build:
+      context: ..
+      dockerfile: logging-api/Dockerfile
+    container_name: logging-api
+
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-observability}
+      MYSQL_USER: ${MYSQL_USER:-npst}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-npst123}
+      OBSERVABILITY_BANK_CODE: ${OBSERVABILITY_BANK_CODE:-NPST}
+      OBSERVABILITY_ENVIRONMENT: ${OBSERVABILITY_ENVIRONMENT:-DEV}
+
+    ports:
+      - "8090:8090"
+
+    volumes:
+      - app_logs:/app/logs
+
+    depends_on:
+      mysql:
+        # Not just "started" - Flyway needs a database that is actually
+        # accepting connections, and MySQL takes ~30s on first boot.
+        condition: service_healthy
+
+    restart: unless-stopped
+
+  sample-bank-app:
+    build:
+      context: ..
+      dockerfile: sample-bank-app/Dockerfile
+    container_name: sample-bank-app
+
+    environment:
+      OBSERVABILITY_BANK_CODE: ${OBSERVABILITY_BANK_CODE:-NPST}
+      OBSERVABILITY_ENVIRONMENT: ${OBSERVABILITY_ENVIRONMENT:-DEV}
+      OBSERVABILITY_LOGGING_ENDPOINT: http://logging-api:8090/api/v1/logs
+      OBSERVABILITY_AUDIT_ENDPOINT: http://logging-api:8090/api/v1/audit
+      MOCK_CBS_BASE_URL: http://localhost:8080/mock-cbs
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      - app_logs:/app/logs
+
+    depends_on:
+      logging-api:
+        condition: service_healthy
+
+    restart: unless-stopped
+
 volumes:
   mysql_data:
+  loki_data:
+  prometheus_data:
+  grafana_data:
+  promtail_positions:
+  # Shared between the applications and Promtail. Each service writes
+  # {spring.application.name}.log, so two JVMs never share a file handle.
+  app_logs:

@@ -9,14 +9,59 @@ clients:
   - url: http://loki:3100/loki/api/v1/push
 
 scrape_configs:
+
   - job_name: observability-platform
 
     static_configs:
       - targets:
           - localhost
-
         labels:
           job: observability
-          service: sample-bank-app
-          bank: bharat-bank
+          # One file per service, so a new microservice needs no config change
+          # here - it just appears.
           __path__: /var/log/bank/*.log
+
+    pipeline_stages:
+
+      # The file is Logstash-encoded JSON. Without this the whole line is an
+      # opaque string and Grafana can only do full-text search.
+      - json:
+          expressions:
+            level: level
+            logger: logger_name
+            timestamp: "@timestamp"
+            payload: message
+
+      # The SDK's structured event is itself JSON, nested inside the message
+      # field. This second pass is what surfaces bankCode, service and channel.
+      - json:
+          source: payload
+          expressions:
+            bank_code: bankCode
+            service: service
+            environment: environment
+            channel: channel
+            event_type: eventType
+            event_level: level
+            trace_id: traceId
+
+      - timestamp:
+          source: timestamp
+          format: RFC3339Nano
+
+      # Labels are an index in Loki, and every distinct combination creates a
+      # stream. These are all low cardinality - a handful of services, four
+      # levels, a few channels.
+      - labels:
+          bank_code:
+          service:
+          environment:
+          channel:
+          event_type:
+          event_level:
+
+      # trace_id is deliberately NOT a label. It is unique per request, so
+      # labelling it would create one stream per request and bring Loki down.
+      # Structured metadata keeps it queryable without indexing it.
+      - structured_metadata:
+          trace_id:

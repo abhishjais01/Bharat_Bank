@@ -4,8 +4,12 @@ import com.npst.loggingapi.entity.ApplicationLog;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
 import java.util.List;
 
 @Repository
@@ -20,4 +24,16 @@ public interface ApplicationLogRepository
      * back together.
      */
     List<ApplicationLog> findByTraceId(String traceId, Sort sort);
+
+    /**
+     * Deletes one batch of expired rows.
+     *
+     * <p>Native and batched deliberately. A single DELETE across millions of
+     * rows holds locks long enough to stall ingest, and this service must never
+     * be the reason something else is slow.
+     */
+    @Modifying
+    @Query(value = "DELETE FROM application_logs WHERE created_at < :cutoff LIMIT :batchSize",
+            nativeQuery = true)
+    int deleteExpired(@Param("cutoff") Instant cutoff, @Param("batchSize") int batchSize);
 }

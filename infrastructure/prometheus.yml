@@ -1,20 +1,23 @@
 global:
-  scrape_interval: 5s
+  scrape_interval: 15s
+  evaluation_interval: 15s
 
 scrape_configs:
 
+  # The banking service. observability_logs_* here is the pipeline's own
+  # health: submitted, sent, failed, dropped.
   - job_name: sample-bank-app
-
     metrics_path: /actuator/prometheus
-
     static_configs:
-      - targets:
-          - host.docker.internal:8080
+      - targets: ["sample-bank-app:8080"]
 
-  - job_name: audit-service
-
+  # The central log service. Previously unscraped, which meant an outage in
+  # the thing that stores every log was itself invisible.
+  - job_name: logging-api
     metrics_path: /actuator/prometheus
-
     static_configs:
-      - targets:
-          - host.docker.internal:8081
+      - targets: ["logging-api:8090"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

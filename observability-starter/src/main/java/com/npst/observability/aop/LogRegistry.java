@@ -44,8 +44,19 @@ public @interface LogRegistry {
     /** The record type acted upon, e.g. TRANSFER, BENEFICIARY. Optional. */
     String entity() default "";
 
-    /** Severity for a successful run. A failure is always logged at ERROR. */
+    /** Severity for a successful run. */
     LogLevel level() default LogLevel.INFO;
+
+    /**
+     * Exceptions that mean "the request was refused", not "the system broke".
+     *
+     * <p>A failure is logged at ERROR by default. But insufficient funds, a
+     * breached transaction limit or an unknown beneficiary are the system
+     * working correctly - they belong at WARN. Logging them as errors trains
+     * everyone to ignore the error dashboard, which is how a real outage gets
+     * missed.
+     */
+    Class<? extends Throwable>[] warnOn() default {};
 
     /**
      * Also write an audit record - who did what to which entity.
