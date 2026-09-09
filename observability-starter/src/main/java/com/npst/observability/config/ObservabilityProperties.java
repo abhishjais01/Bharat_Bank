@@ -40,6 +40,8 @@ public class ObservabilityProperties {
     private final Sink sink = new Sink();
     private final Trace trace = new Trace();
     private final Masking masking = new Masking();
+    private final Context context = new Context();
+    private final Aop aop = new Aop();
 
     public boolean isEnabled() {
         return enabled;
@@ -79,6 +81,14 @@ public class ObservabilityProperties {
 
     public Masking getMasking() {
         return masking;
+    }
+
+    public Context getContext() {
+        return context;
+    }
+
+    public Aop getAop() {
+        return aop;
     }
 
     /** Identity of the institution this deployment belongs to. */
@@ -258,6 +268,77 @@ public class ObservabilityProperties {
 
         public void setMdcKey(String mdcKey) {
             this.mdcKey = mdcKey;
+        }
+    }
+
+    /**
+     * Headers that tell us where a request came from.
+     *
+     * <p>The gateway and the mobile app set these; every value is optional, so
+     * a scheduled job or an internal call simply carries fewer of them.
+     */
+    public static class Context {
+
+        /** MOBILE, WEB, BRANCH, ATM, API. */
+        private String channelHeader = "X-Channel";
+
+        /** Device fingerprint, for tying a session to a handset. */
+        private String deviceHeader = "X-Device-Id";
+
+        /** CIF or customer reference of the person the request acts for. */
+        private String customerHeader = "X-Customer-Id";
+
+        /**
+         * Checked in order for the caller's real address. Behind a load
+         * balancer the socket address is the balancer, not the customer, so a
+         * forwarded header has to win when present.
+         */
+        private List<String> ipHeaders = List.of("X-Forwarded-For", "X-Real-IP");
+
+        public String getChannelHeader() {
+            return channelHeader;
+        }
+
+        public void setChannelHeader(String channelHeader) {
+            this.channelHeader = channelHeader;
+        }
+
+        public String getDeviceHeader() {
+            return deviceHeader;
+        }
+
+        public void setDeviceHeader(String deviceHeader) {
+            this.deviceHeader = deviceHeader;
+        }
+
+        public String getCustomerHeader() {
+            return customerHeader;
+        }
+
+        public void setCustomerHeader(String customerHeader) {
+            this.customerHeader = customerHeader;
+        }
+
+        public List<String> getIpHeaders() {
+            return ipHeaders;
+        }
+
+        public void setIpHeaders(List<String> ipHeaders) {
+            this.ipHeaders = ipHeaders;
+        }
+    }
+
+    /** The @LogRegistry aspect. */
+    public static class Aop {
+
+        private boolean enabled = true;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
         }
     }
 

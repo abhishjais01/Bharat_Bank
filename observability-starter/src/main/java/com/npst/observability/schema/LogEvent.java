@@ -15,6 +15,13 @@ public class LogEvent {
     private String environment;
     private String service;
 
+    // Where the request came from. Captured once at the edge by
+    // RequestContextFilter; all optional.
+    private String channel;
+    private String deviceId;
+    private String ipAddress;
+    private String customerId;
+
     private EventType eventType;
     private LogLevel level;
 
@@ -67,6 +74,38 @@ public class LogEvent {
 
     public void setService(String service) {
         this.service = service;
+    }
+
+    public String getChannel() {
+        return channel;
+    }
+
+    public void setChannel(String channel) {
+        this.channel = channel;
+    }
+
+    public String getDeviceId() {
+        return deviceId;
+    }
+
+    public void setDeviceId(String deviceId) {
+        this.deviceId = deviceId;
+    }
+
+    public String getIpAddress() {
+        return ipAddress;
+    }
+
+    public void setIpAddress(String ipAddress) {
+        this.ipAddress = ipAddress;
+    }
+
+    public String getCustomerId() {
+        return customerId;
+    }
+
+    public void setCustomerId(String customerId) {
+        this.customerId = customerId;
     }
 
     public EventType getEventType() {

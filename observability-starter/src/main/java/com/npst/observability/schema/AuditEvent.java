@@ -6,7 +6,7 @@ public class AuditEvent extends LogEvent {
 
     private String actorId;
     private String actorType;
-    private AuditAction action;
+    private String action;
     private String entity;
     private String entityId;
     private String description;
@@ -31,11 +31,11 @@ public class AuditEvent extends LogEvent {
         this.actorType = actorType;
     }
 
-    public AuditAction getAction() {
+    public String getAction() {
         return action;
     }
 
-    public void setAction(AuditAction action) {
+    public void setAction(String action) {
         this.action = action;
     }
 

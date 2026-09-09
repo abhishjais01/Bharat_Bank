@@ -26,6 +26,10 @@ public final class LogEventMapper {
         request.setBankCode(event.getBankCode());
         request.setEnvironment(event.getEnvironment());
         request.setService(event.getService());
+        request.setChannel(event.getChannel());
+        request.setDeviceId(event.getDeviceId());
+        request.setIpAddress(event.getIpAddress());
+        request.setCustomerId(event.getCustomerId());
         request.setEventType(event.getEventType());
         request.setLevel(event.getLevel());
         request.setMessage(event.getMessage());

@@ -90,4 +90,16 @@
 
     </dependencies>
 
+    <build>
+        <plugins>
+            <!-- Repackages into an executable fat jar. Without this the module
+                 built a plain library jar with no Main-Class, so it could not
+                 be run with java -jar - and could not be containerised. -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
 </project>

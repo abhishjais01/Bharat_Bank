@@ -7,7 +7,8 @@ import com.npst.observability.client.TraceRestTemplateInterceptor;
 import com.npst.observability.config.bank.BankResolver;
 import com.npst.observability.config.bank.PropertyBankResolver;
 import com.npst.observability.exception.GlobalExceptionHandler;
-import com.npst.observability.filter.TraceFilter;
+import com.npst.observability.aop.LogRegistryAspect;
+import com.npst.observability.filter.RequestContextFilter;
 import com.npst.observability.interceptor.LoggingInterceptor;
 import com.npst.observability.logger.CommonLogger;
 import com.npst.observability.logger.CommonLoggerImpl;
@@ -131,15 +132,15 @@ public class ObservabilityAutoConfiguration {
 
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
-    @ConditionalOnMissingBean(name = "observabilityTraceFilterRegistration")
-    public FilterRegistrationBean<TraceFilter> observabilityTraceFilterRegistration(
+    @ConditionalOnMissingBean(name = "observabilityRequestContextFilterRegistration")
+    public FilterRegistrationBean<RequestContextFilter> observabilityRequestContextFilterRegistration(
             ObservabilityProperties properties) {
 
-        FilterRegistrationBean<TraceFilter> registration =
-                new FilterRegistrationBean<>(new TraceFilter(properties));
+        FilterRegistrationBean<RequestContextFilter> registration =
+                new FilterRegistrationBean<>(new RequestContextFilter(properties));
 
         // First in the chain: everything logged afterwards must already carry
-        // the correlation id.
+        // the correlation id and the caller's context.
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         registration.addUrlPatterns("/*");
 
@@ -163,6 +164,21 @@ public class ObservabilityAutoConfiguration {
                 registry.addInterceptor(interceptor);
             }
         };
+    }
+
+    /**
+     * Drives {@code @LogRegistry}. Conditional on AspectJ so a service that
+     * excludes spring-boot-starter-aop still starts, just without the
+     * annotation support.
+     */
+    @Bean
+    @ConditionalOnClass(org.aspectj.lang.ProceedingJoinPoint.class)
+    @ConditionalOnProperty(prefix = "observability.aop", name = "enabled",
+            havingValue = "true", matchIfMissing = true)
+    @ConditionalOnMissingBean
+    public LogRegistryAspect logRegistryAspect(CommonLogger commonLogger,
+                                               ObjectProvider<ObjectMapper> objectMapper) {
+        return new LogRegistryAspect(commonLogger, resolveMapper(objectMapper));
     }
 
     /**

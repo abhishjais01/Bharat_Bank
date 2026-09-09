@@ -45,6 +45,18 @@ public class LogIngestRequest {
     @NotBlank(message = "service is required")
     private String service;
 
+    /**
+     * Request context, captured at the service edge. Optional - a scheduled job
+     * or an internal service-to-service call has no channel or customer.
+     */
+    private String channel;
+
+    private String deviceId;
+
+    private String ipAddress;
+
+    private String customerId;
+
     @NotNull(message = "eventType is required")
     private EventType eventType;
 
@@ -106,6 +118,38 @@ public class LogIngestRequest {
 
     public void setService(String service) {
         this.service = service;
+    }
+
+    public String getChannel() {
+        return channel;
+    }
+
+    public void setChannel(String channel) {
+        this.channel = channel;
+    }
+
+    public String getDeviceId() {
+        return deviceId;
+    }
+
+    public void setDeviceId(String deviceId) {
+        this.deviceId = deviceId;
+    }
+
+    public String getIpAddress() {
+        return ipAddress;
+    }
+
+    public void setIpAddress(String ipAddress) {
+        this.ipAddress = ipAddress;
+    }
+
+    public String getCustomerId() {
+        return customerId;
+    }
+
+    public void setCustomerId(String customerId) {
+        this.customerId = customerId;
     }
 
     public EventType getEventType() {

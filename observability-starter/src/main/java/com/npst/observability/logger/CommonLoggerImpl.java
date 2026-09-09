@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.npst.observability.config.ObservabilityProperties;
 import com.npst.observability.config.bank.BankResolver;
 import com.npst.observability.contract.EventType;
+import com.npst.observability.context.RequestContext;
 import com.npst.observability.contract.LogLevel;
 import com.npst.observability.mapper.LogEventMapper;
 import com.npst.observability.masking.MetadataMasker;
@@ -94,6 +95,18 @@ public class CommonLoggerImpl implements CommonLogger {
                       String entityId,
                       String description) {
 
+        audit(actorId, actorType, action == null ? null : action.name(),
+                entity, entityId, description);
+    }
+
+    @Override
+    public void audit(String actorId,
+                      String actorType,
+                      String action,
+                      String entity,
+                      String entityId,
+                      String description) {
+
         try {
             AuditEvent event = new AuditEvent();
 
@@ -148,6 +161,13 @@ public class CommonLoggerImpl implements CommonLogger {
         event.setBankCode(bankResolver.getCode());
         event.setEnvironment(bankResolver.getEnvironment());
         event.setService(bankResolver.getServiceName());
+
+        // Captured once per request at the edge, so every log carries it -
+        // including logs written by code that knows nothing about this SDK.
+        event.setChannel(RequestContext.channel());
+        event.setDeviceId(RequestContext.deviceId());
+        event.setIpAddress(RequestContext.ipAddress());
+        event.setCustomerId(RequestContext.customerId());
 
         if (event.getTimestamp() == null) {
             event.setTimestamp(Instant.now());
