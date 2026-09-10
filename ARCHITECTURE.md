@@ -16,15 +16,16 @@
 5. [The five modules](#5-the-five-modules)
 6. [Life of a single log](#6-life-of-a-single-log)
 7. [Inside the SDK](#7-inside-the-sdk-observability-starter)
-8. [Inside the Logging API](#8-inside-the-logging-api)
-9. [The database](#9-the-database)
-10. [Configuration](#10-configuration)
-11. [Plugging in a real microservice](#11-plugging-in-a-real-microservice)
-12. [The build journey](#12-the-build-journey)
-13. [Where we are now](#13-where-we-are-now)
-14. [What is left](#14-what-is-left)
-15. [Running it locally](#15-running-it-locally)
-16. [Design decisions and why](#16-design-decisions-and-why)
+8. [The audit trail](#8-the-audit-trail)
+9. [Inside the Logging API](#9-inside-the-logging-api)
+10. [The database](#10-the-database)
+11. [Configuration](#11-configuration)
+12. [Plugging in a real microservice](#12-plugging-in-a-real-microservice)
+13. [The build journey](#13-the-build-journey)
+14. [Where we are now](#14-where-we-are-now)
+15. [What is left](#15-what-is-left)
+16. [Running it locally](#16-running-it-locally)
+17. [Design decisions and why](#17-design-decisions-and-why)
 
 ---
 
@@ -201,7 +202,7 @@ flowchart TD
 
 | Module | What it is | Think of it as |
 |---|---|---|
-| **observability-contract** | 5 plain Java classes, no Spring | The *dictionary* both sides agree on |
+| **observability-contract** | 6 plain Java classes, no Spring | The *dictionary* both sides agree on |
 | **observability-starter** | The SDK every service imports | The *pen* that writes the diary |
 | **sample-bank-app** | Fake bank, to be swapped for real services | The *test subject* |
 | **logging-api** | Receives, validates, stores | The *filing cabinet* |
@@ -300,9 +301,15 @@ public interface CommonLogger {
     void logApplication(LogLevel level, String message, Map<String, Object> metadata);
     void audit(String actorId, String actorType, AuditAction action,
                String entity, String entityId, String description);
+    void audit(String actorId, String actorType, String action,
+               String entity, String entityId, String description);
+    void audit(AuditEvent event);
     void error(String message, Exception cause);
 }
 ```
+
+Most services never call any of this directly. `@LogRegistry` does it for
+them - see section 7.6.
 
 The `level` overload matters more than it looks. Originally *everything* was
 hardcoded to `INFO` — which made the planned "search by level" feature
@@ -443,7 +450,135 @@ every failure was counted and logged with its trace ID.
 
 ---
 
-## 8. Inside the Logging API
+### 7.6 `@LogRegistry` - logging as a declaration
+
+Most services never call `CommonLogger` at all. They annotate:
+
+```java
+@LogRegistry(action = "FUND_TRANSFER", module = "PAYMENTS", entity = "TRANSFER",
+        audit = true, logArguments = true,
+        warnOn = {InsufficientFundsException.class, LimitExceededException.class})
+public ResponseEntity<TransferResponse> transfer(@RequestBody TransferRequest request) {
+    AuditContext.amount(request.amount(), "INR");
+    return ResponseEntity.status(CREATED).body(...);
+}
+```
+
+The record is assembled from three sources:
+
+```mermaid
+flowchart LR
+    A["<b>Constant</b><br/>from the annotation<br/><br/>action<br/>module<br/>entity"]
+    B["<b>Runtime</b><br/>from the execution<br/><br/>durationMs<br/>outcome<br/>statusCode<br/>exception"]
+    C["<b>Contributed</b><br/>from AuditContext<br/><br/>amount + currency<br/>businessRef<br/>entityId<br/>before/after state"]
+    A & B & C --> R["one complete record"]
+
+    style A fill:#dbeafe,color:#1e3a8a
+    style B fill:#fef3c7,color:#78350f
+    style C fill:#dcfce7,color:#14532d
+```
+
+`AuditContext` exists because neither the annotation nor the aspect can know a
+particular transfer's amount. Without it, `amount` and `business_ref` would be
+columns that are always null. It is drained in the aspect's `finally`, so a
+thrown exception cannot leave a value behind to attach itself to the next
+transaction on that thread.
+
+**Two rules the aspect never breaks.** It observes but does not participate -
+exceptions re-throw unchanged and return values pass through untouched. And a
+logging failure never becomes a banking failure - record assembly is wrapped,
+so a bug there cannot take down a fund transfer.
+
+**`warnOn` separates refusal from fault.** Insufficient funds is the system
+working correctly; CBS being unreachable is not. Logging both at ERROR is how a
+team learns to ignore the error dashboard and misses a real outage.
+
+| Outcome | Level |
+|---|---|
+| Success | `level()`, default INFO |
+| Exception listed in `warnOn` | **WARN** |
+| Any other exception | **ERROR** |
+
+*Caveat:* Spring AOP is proxy based, so `this.someMethod()` self-calls are not
+intercepted. Annotate the method called from outside.
+
+### 7.7 Request context - where the request came from
+
+`RequestContextFilter` captures five values once, at the edge, into MDC:
+
+| MDC key | Source | Note |
+|---|---|---|
+| `traceId` | `X-Trace-Id` | Honoured, not regenerated |
+| `channel` | `X-Channel` | MOBILE, WEB, BRANCH, ATM |
+| `deviceId` | `X-Device-Id` | |
+| `customerId` | `X-Customer-Id` | |
+| `ipAddress` | `X-Forwarded-For` | First entry - behind a balancer the socket address is the balancer |
+
+Because they live in MDC, **every** log line in the request carries them -
+including lines written by code that has never heard of this platform.
+
+---
+
+## 8. The audit trail
+
+Audit is a separate table, a separate endpoint, and separate rules. It answers
+*who did what*, is read by compliance rather than support, and is retained for
+years rather than days.
+
+```mermaid
+flowchart TB
+    E["One audited action"] --> W["Wire copy<br/><b>identity intact</b>"]
+    E --> F["File copy<br/><b>identity masked</b>"]
+    W --> DB[("audit_logs<br/>append-only<br/>hash chained")]
+    F --> L["log file → Promtail → Loki"]
+
+    style W fill:#dcfce7,color:#14532d
+    style F fill:#dbeafe,color:#1e3a8a
+    style DB fill:#059669,color:#fff
+```
+
+**The same event, two audiences, two rules.** The audit table keeps
+`customer_id` and `mobile_number` unmasked, because a regulator asking who
+moved money cannot work with `XXXXXXXX5510`. The file copy is masked, because
+it is tailed straight into Loki, which has no access control of its own. The
+wire copy is taken *before* the masking runs.
+
+### Immutability - two layers in place, one still outstanding
+
+| Layer | Mechanism | Status |
+|---|---|---|
+| Application | `@Immutable` - Hibernate never issues an UPDATE | ✅ in place |
+| Database | A trigger rejects `UPDATE` and `DELETE` outright | ✅ in place |
+| Grants | The app user should hold INSERT and SELECT only | ❌ **not applied** |
+
+> **Be precise about this.** The application user currently holds
+> `ALL PRIVILEGES ON observability.*`. The trigger is what actually stops a
+> delete today; the grant layer is designed but not applied, so the defence is
+> two-deep, not three. Applying it is one statement, and it belongs in the
+> deployment runbook rather than in `mysql-init.sql`, because Flyway needs DDL
+> rights to create the table in the first place:
+>
+> ```sql
+> -- After migrations have run, as root:
+> REVOKE ALL PRIVILEGES ON observability.audit_logs FROM 'npst'@'%';
+> GRANT INSERT, SELECT ON observability.audit_logs TO 'npst'@'%';
+> ```
+
+Proven against real MySQL:
+
+```
+UPDATE audit_logs SET description='TAMPERED' WHERE ...
+  → ERROR 1644 (45000): audit_logs is append-only: UPDATE is not permitted
+```
+
+Plus a **SHA-256 hash chain**: each row commits to its predecessor's hash, so
+altering or removing history is detectable even by someone who drops the
+triggers. The chain tip is read under a pessimistic write lock, which
+serialises audit inserts - the price of a chain that cannot fork.
+
+---
+
+## 9. Inside the Logging API
 
 ```mermaid
 flowchart TB
@@ -493,7 +628,7 @@ Every response uses the same envelope, including the trace ID:
 
 ---
 
-## 9. The database
+## 10. The database
 
 ```mermaid
 erDiagram
@@ -576,7 +711,7 @@ failure**, not a silent runtime surprise.
 
 ---
 
-## 10. Configuration
+## 11. Configuration
 
 Everything lives under one `observability.*` prefix. A new microservice needs
 **three lines**:
@@ -642,7 +777,7 @@ environment.
 
 ---
 
-## 11. Plugging in a real microservice
+## 12. Plugging in a real microservice
 
 The promise: replacing `sample-bank-app` with a real service is a **dependency
 plus three YAML lines**.
@@ -696,7 +831,7 @@ masking calls, no HTTP client. The service's package name is irrelevant.
 
 ---
 
-## 12. The build journey
+## 13. The build journey
 
 ### Where the project actually stood at the start
 
@@ -725,11 +860,11 @@ flowchart LR
     style S1 fill:#059669,color:#fff
     style S2 fill:#059669,color:#fff
     style S3 fill:#059669,color:#fff
-    style S4 fill:#f59e0b,color:#000
-    style S5 fill:#e2e8f0,color:#334155
-    style S6 fill:#e2e8f0,color:#334155
-    style S7 fill:#e2e8f0,color:#334155
-    style S8 fill:#e2e8f0,color:#334155
+    style S4 fill:#059669,color:#fff
+    style S5 fill:#059669,color:#fff
+    style S6 fill:#059669,color:#fff
+    style S7 fill:#059669,color:#fff
+    style S8 fill:#059669,color:#fff
 ```
 
 ### What each step did
@@ -739,11 +874,11 @@ flowchart LR
 | **1** | **Toolchain + green build** | Installed JDK 21; enforcer plugin fails loudly on the wrong JDK; fixed the 4 compile errors; retired `audit-service`; `errorResponse` → `ErrorResponse` with the getters Jackson needs | ✅ `811dd54` |
 | **2** | **Real Spring Boot starter** | All beans moved to auto-configuration; created `observability-contract`; collapsed 3 config models into one `observability.*` tree; stopped publishing a `RestTemplate` bean that hijacked the host app's | ✅ `f269896` |
 | **3** | **Masking + async transport** | `MetadataMasker`; `LogSink` → `AsyncLogSink` → `HttpLogSink`; Micrometer counters; Feign + WebClient propagation; per-service rolling log files | ✅ `f32c6de` |
-| **4** | **Validation + persistence** | `logging-api` consumes the contract; full exception advice; Flyway `V1` + `V2`; `ddl-auto: validate`; actuator on the log service | 🟡 code done, DB unverified |
-| **5** | Search APIs | `GET /logs/{traceId}` and filtered/paged search | ⬜ not started |
-| **6** | Mock from the PRD | Balance, Summary, Statement, Beneficiary+OTP, IMPS transfer | ⬜ not started |
-| **7** | Docker Compose | Dockerfiles, volumes, Promtail JSON labels, Grafana as code | ⬜ not started |
-| **8** | End-to-end + docs | The 5-point M5 gate, Testcontainers, `INTEGRATION.md` | ⬜ not started |
+| **4** | **Validation + persistence** | `logging-api` consumes the contract; full exception advice; Flyway `V1` + `V2`; `ddl-auto: validate`; actuator on the log service | ✅ verified |
+| **5** | **AOP + request context** | `@LogRegistry`, `LogRegistryAspect`, `RequestContextFilter` capturing channel/device/IP/customer | ✅ |
+| **6** | **Audit + search** | `V3`, audit persistence, hash chain, all four search endpoints, springdoc | ✅ |
+| **7** | **Mock from the PRD** | Five journeys in `com.bank.mock`, stub CBS over real HTTP | ✅ |
+| **8** | **Compose + E2E + docs** | Dockerfiles, volumes, Promtail labels, Grafana as code, M5 gate, `INTEGRATION.md` | ✅ |
 
 ### A bug worth remembering
 
@@ -761,14 +896,12 @@ it, and every step since ends with a live runtime check, not just `mvn test`.
 
 ---
 
-## 13. Where we are now
+## 14. Where we are now
 
 ```mermaid
 pie showData
-    title Layer 1 milestones
-    "Complete and verified" : 3
-    "Code done, needs MySQL" : 1
-    "Not started" : 4
+    title Layer 1 milestones — all complete
+    "Complete and verified" : 8
 ```
 
 ### Milestones
@@ -777,11 +910,12 @@ pie showData
 |---|---|---|
 | **M1 — Metadata enrichment** | ✅ **Done** | Live capture shows all 8 fields auto-populated |
 | **M2 — API validation** | ✅ **Done** | 7 tests: 400 / 422 / 500 paths all covered |
-| **M3 — MySQL persistence** | 🟡 **Written** | Flyway migrations written; needs a running MySQL |
-| **M4 — Search APIs** | ⬜ Not started | Step 5 |
-| **M5 — End-to-end** | ⬜ Not started | Step 8 |
+| **M3 — MySQL persistence** | ✅ **Done** | Both migrations applied against MySQL 8.0.45 |
+| **M4 — Search APIs** | ✅ **Done** | All four endpoints returning live |
+| **M5 — End-to-end** | ✅ **PASSED** | 9 passed, 0 failed, Loki skipped |
+| **Audit trail + AOP** | ✅ **Done** | Immutability and hash chain proven against MySQL |
 
-### Test coverage today — **29 passing**
+### Test coverage today — **43 passing**
 
 | Suite | Tests | Guards |
 |---|---|---|
@@ -790,6 +924,8 @@ pie showData
 | `MetadataMaskerTest` | 8 | OTPs never leak; `pin` ≠ `shipping` |
 | `AsyncLogSinkTest` | 4 | Never blocks; bounded; drops counted |
 | `LoggingControllerTest` | 7 | Every validation and error path |
+| `LogRegistryAspectTest` | 10 | Constant + runtime capture; never alters behaviour |
+| `AuditHasherTest` | 4 | Altering any audited field breaks the chain |
 
 ### Verified live, not just in tests
 
@@ -811,49 +947,96 @@ pie showData
 
 ---
 
-## 14. What is left
+## 15. What is left
 
 ```mermaid
-flowchart TB
-    NOW["You are here"] --> W["⚠️ Install WSL2<br/>+ reboot"]
-    W --> V["Verify M3<br/>migrations + triggers<br/>+ live row in MySQL"]
-    V --> S5["Step 5 — Search APIs"]
-    S5 --> S6["Step 6 — Mock from PRD"]
-    S6 --> S7["Step 7 — Docker Compose"]
-    S7 --> S8["Step 8 — E2E + docs"]
-    S8 --> DONE["✅ Layer 1 complete<br/>→ Layer 2: Audit"]
+flowchart LR
+    NOW["Layer 1 complete<br/>M1-M5 passed"] --> W["⚠️ Install WSL2<br/>+ reboot"]
+    W --> C["docker compose up -d --build<br/>first real run"]
+    C --> G["Re-run the M5 gate<br/>turns the Loki SKIP into a PASS"]
+    G --> L2["Layer 2 - error logs,<br/>advanced tracing"]
 
+    style NOW fill:#dcfce7,color:#14532d
     style W fill:#fee2e2,color:#7f1d1d
-    style DONE fill:#dcfce7,color:#14532d
 ```
 
-### Immediate
+### The one real blocker
 
-1. **Install WSL2 and reboot** — the only thing blocking progress.
-2. **Verify Milestone 3** — the one thing I'd bet against is Hibernate's
-   `validate` accepting the `Map<String,Object>` ↔ MySQL `json` mapping. If it
-   complains, it's a one-line fix.
+**Docker has never run on this machine.** WSL2 is not installed, and Windows 11
+Home has no Hyper-V, so WSL2 is the only backend Docker Desktop can use.
 
-### Then, in order
+```powershell
+wsl --install --no-distribution     # as Administrator, then reboot
+```
 
-- **Step 5** — `GET /api/v1/logs/{traceId}` returning the *whole* journey as a
-  list, plus filtered and paged search.
-- **Step 6** — rebuild the mock from the PRD: Balance (`₹82,450`), Account
-  Summary (US-07), Statement (US-08), Beneficiary with OTP (US-09 — the live
-  masking proof), IMPS transfer (US-10 — drives INFO/WARN/ERROR).
-- **Step 7** — Dockerfiles; **volumes for Loki, Grafana and Prometheus** (all
-  three currently lose everything on recreate); Promtail JSON parsing so
-  `bankCode`/`service`/`level` become Loki labels; Grafana dashboards as code.
-- **Step 8** — the five-point M5 gate, Testcontainers, `INTEGRATION.md`.
+Everything that does not need Docker is verified against a native MySQL
+8.0.45. The Compose stack, the Dockerfiles, the Promtail label pipeline and
+the Grafana provisioning are **written but never executed** - expect small
+fixes on the first run.
 
-### Explicitly **not** being built yet
+### Known gaps
 
-Audit persistence · Error persistence · Kafka · Elasticsearch · OpenTelemetry
-redesign · Authentication/RBAC · Notifications.
+Grouped by how much they would matter in production.
+
+**Must fix before this carries real traffic**
+
+| Gap | Consequence |
+|---|---|
+| The Compose stack has never been run | Everything Docker-related is written, not proven |
+| The Loki half of M5 is unverified | Criterion 2 of the five skips; the file to Loki path has not been exercised since the log filename changed |
+| No authentication on any endpoint | `/api/v1/audit` returns unmasked customer ids and mobile numbers to anyone who can reach port 8090 |
+| The audit grant is not applied | See section 8 - two layers of immutability, not three |
+| No integration test touches a database | `logging-api` has 11 tests, all mocked or pure; the context test is still disabled |
+| No CI | Every green result so far came from running the build by hand |
+
+**Should fix**
+
+| Gap | Consequence |
+|---|---|
+| `status_code` is null on failure paths | The aspect reads it from `ResponseEntity`; an escaping exception has none, so refused transfers record no status |
+| The hash chain is never verified | The data supports detection; no code or endpoint walks the chain |
+| The chain-tip lock serialises audit writes | Correct, but a bottleneck at real volume, and no metric would show it coming |
+| No dead-letter path | A dropped log is counted and gone; a sustained outage loses data visibly-but-permanently |
+| Audit reads share the write datasource | Fine now; the seam for a read replica exists in `AuditQueryService` |
+
+**Loose ends**
+
+| Gap | Consequence |
+|---|---|
+| `CommonLogger.error()` is never called | It exists, reaches only the file, and nothing uses it |
+| `ErrorEvent`, `AuditAction`, `ActorType`, `GlobalExceptionHandler`, `ErrorResponse` | Effectively dead - each referenced by one file or none |
+| `LoggingInterceptor` writes unstructured lines | A second logging path that reaches the file but never MySQL |
+| `MockCbsController` ships inside `sample-bank-app` | A production build of that module would contain fake CBS endpoints |
+| No index on `metadata` | Any JSON search is a full scan |
+| A leftover `IMMUTABILITY-TEST` row | Sits in `audit_logs`, undeletable by design |
 
 ---
 
-## 15. Running it locally
+### Decisions made without being specified
+
+Everything here was a judgment call during the build, not a requirement. Each
+is cheap to change now and expensive later.
+
+| Decision | The alternative |
+|---|---|
+| `customerId` is **unmasked in application logs** as well as audit | Mask it, and lose "show me everything for this customer" as a search |
+| `mobileNumber` is masked in application logs, unmasked in audit | One rule for both |
+| Audit is written for **refused** transfers too, not just successes | Only record what succeeded |
+| A balance enquiry is **not** audited | Audit every read |
+| Queue overflow drops the **oldest** line | Drop newest, or block |
+| Masking matches keys **exactly** after normalising | Substring matching - which would make `customerMobile` match, and also make `pin` swallow `shipping` |
+| Retention is **off** by default | Purge at 90 days out of the box |
+| `event_type` was kept | Drop it, as the original field list implied |
+| Spring AOP proxying, not AspectJ weaving | Weaving, which would also catch self-invocation |
+
+### Explicitly not being built
+
+Error-log persistence · Kafka · Elasticsearch · OpenTelemetry redesign ·
+Authentication/RBAC on the search APIs · Notifications.
+
+---
+
+## 16. Running it locally
 
 ### Prerequisites
 
@@ -861,6 +1044,19 @@ redesign · Authentication/RBAC · Notifications.
 java -version     # must be 21.x
 docker ps         # must return a table, not an error
 ```
+
+**One server-level setting is required**, and it is a change to the MySQL
+instance rather than to this repository. MySQL 8 refuses `CREATE TRIGGER` from
+a non-SUPER user while binary logging is on, which it is by default - so
+`V2__audit_logs.sql` fails without this:
+
+```sql
+SET PERSIST log_bin_trust_function_creators = 1;
+```
+
+`infrastructure/mysql-init.sql` includes it, and the Compose MySQL sets the
+equivalent flag on startup. If you are pointing at a MySQL installed directly
+on the host, this has to be run once as root.
 
 ### Build
 
@@ -909,7 +1105,7 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 
 ---
 
-## 16. Design decisions and why
+## 17. Design decisions and why
 
 | Decision | Alternative rejected | Why |
 |---|---|---|
@@ -927,6 +1123,14 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 | **DB triggers for immutability** | Application-level rule | A trigger survives a bug, a migration, and an operator at a prompt |
 | **`traceId` NOT a Loki label** | Label everything | Unbounded label cardinality destroys Loki; filter on the line instead |
 | **Per-service log files** | One shared file | Two JVMs appending to one file interleave and corrupt lines |
+| **AOP annotation over manual calls** | `commonLogger.log(...)` everywhere | The method goes back to expressing the banking operation; nothing to forget |
+| **`warnOn` for business refusals** | Everything that throws is ERROR | An error dashboard full of insufficient-funds is an error dashboard nobody reads |
+| **`AuditContext` thread-local** | Extra annotation attributes | Only the method knows a transfer's amount; without it those columns are always null |
+| **Audit keeps identity unmasked** | Mask everywhere | A regulator asking who moved money cannot work with `XXXXXXXX5510` |
+| **Hash chain on audit rows** | Trust the triggers | The triggers stop an UPDATE; the chain catches someone who drops them, edits, and puts them back |
+| **Chain tip read under a lock** | Unsynchronised insert | Two writers claiming the same parent forks the chain, and it stops proving anything |
+| **Retention job names its table** | Table as a parameter | A purge job that *can* be pointed at `audit_logs` eventually will be |
+| **Free-form audit action string** | The `AuditAction` enum | Eight constants against a bank's hundreds of actions; each new domain would edit this shared library |
 
 ---
 
@@ -938,7 +1142,8 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 ### `observability-contract` — the shared language
 | File | Purpose |
 |---|---|
-| `LogIngestRequest` | The wire payload. One definition, both sides |
+| `LogIngestRequest` | The application-log wire payload |
+| `AuditIngestRequest` | The audit wire payload - separate shape, separate rules |
 | `ApiResponse<T>` | Standard envelope with `traceId` |
 | `LogIngestResponse` | Success body carrying `logId` |
 | `LogLevel` / `EventType` | Shared enums |
@@ -947,6 +1152,10 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 | File | Purpose |
 |---|---|
 | `CommonLogger` / `CommonLoggerImpl` | The entry point + enrichment |
+| `LogRegistry` / `LogRegistryAspect` | Logging as a declaration on the method |
+| `RequestContext` | Channel, device, IP, customer - captured at the edge |
+| `AuditContext` | What only the business method knows: amount, reference |
+| `AuditEventMapper` | Audit event to wire contract, unmasked |
 | `ObservabilityAutoConfiguration` | Wires everything; makes it reusable |
 | `ObservabilityFeignAutoConfiguration` | Trace propagation over Feign |
 | `ObservabilityWebClientAutoConfiguration` | Trace propagation over WebClient |
@@ -955,7 +1164,7 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 | `MetadataMasker` / `MaskingUtil` | The OTP gate |
 | `LogSink` / `AsyncLogSink` / `HttpLogSink` | The transport chain |
 | `SinkMetrics` | Pipeline counters |
-| `TraceFilter` | Correlation ID in |
+| `RequestContextFilter` | Correlation id and caller context in |
 | `TraceRestTemplateInterceptor` | Correlation ID out |
 | `LoggingInterceptor` | Request start/complete lines |
 | `LogEvent` / `AuditEvent` / `ErrorEvent` | Internal event model |
@@ -971,13 +1180,21 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 | `ApplicationLog` | JPA entity |
 | `LogMapper` | Contract → entity, both timestamps |
 | `V1__application_logs.sql` | The log table + 5 indexes |
-| `V2__audit_logs.sql` | Layer 2 table, append-only, hash chained |
+| `V2__audit_logs.sql` | Audit table, append-only, hash chained |
+| `V3__audit_context_and_business_fields.sql` | Channel, device, IP, customer, amount, status code |
+| `AuditController` / `AuditService` | Append and search the audit trail |
+| `AuditHasher` | The SHA-256 chain |
+| `LogSpecifications` | Combinable search filters |
+| `LogRetentionJob` | 90-day purge, `application_logs` only |
 
 ### `infrastructure`
 | File | Purpose |
 |---|---|
-| `docker-compose.yml` | MySQL, Loki, Promtail, Prometheus, Grafana |
-| `promtail-config.yml` | Tails `logs/*.log` → Loki |
+| `docker-compose.yml` | The whole platform, with volumes and healthchecks |
+| `promtail-config.yml` | Parses the JSON, promotes labels, keeps traceId out of them |
+| `grafana/provisioning/` | Datasources and dashboard, as code |
+| `smoke-test.sh` | The Milestone 5 gate |
+| `mysql-init.sql` | Database bootstrap for a host MySQL |
 | `loki-config.yml` | Loki storage |
 | `prometheus.yml` | Scrape targets |
 
@@ -985,4 +1202,6 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 
 ---
 
-*Generated during the Layer 1 build. Last updated at the end of Step 4.*
+*Layer 1 complete. Last updated at the end of Step 8.*
+
+*See `INTEGRATION.md` for adopting the platform in a Spring Boot or NestJS service.*

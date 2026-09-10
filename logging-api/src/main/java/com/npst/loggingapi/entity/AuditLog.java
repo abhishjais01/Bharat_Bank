@@ -18,9 +18,14 @@ import java.util.Map;
  * One audit record: who did what, to which entity, from where.
  *
  * <p>{@code @Immutable} tells Hibernate never to issue an UPDATE for this
- * entity. That is the first of three layers - the second is the INSERT/SELECT
- * grant, the third is the database trigger from V2. An audit trail protected
- * only by convention is not protected.
+ * entity. It pairs with the database trigger from V2, which rejects UPDATE and
+ * DELETE outright - an audit trail protected only by application convention is
+ * not protected.
+ *
+ * <p>A third layer belongs here and is not yet applied: the application user
+ * should hold INSERT and SELECT on this table and nothing more. Today it holds
+ * ALL PRIVILEGES, so the trigger is the only thing standing between a stray
+ * DELETE and the audit history. See ARCHITECTURE.md, section 8.
  *
  * <p>Identity fields here are <b>unmasked</b> by policy. A regulator asking who
  * moved money cannot work with a masked value. The copy written to the log file
