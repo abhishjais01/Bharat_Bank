@@ -1,6 +1,6 @@
 package com.bank.mock.exception;
 
-/** US-10: the transfer is above the customer's per-transaction limit. */
+// amount is above the transfer limit
 public class LimitExceededException extends RuntimeException {
 
     public LimitExceededException(String message) {

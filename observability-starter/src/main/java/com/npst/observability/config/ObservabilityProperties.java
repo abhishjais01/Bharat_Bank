@@ -5,37 +5,17 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import java.time.Duration;
 import java.util.List;
 
-/**
- * Every knob the observability platform exposes, under one prefix.
- *
- * <p>Replaces the three competing config models this project used to have:
- * {@code observability.*}, {@code observability.bank.*}, and an endpoint read
- * through a raw {@code @Value}. Nothing bound {@code service} at all.
- *
- * <p>A banking microservice adopting the starter needs three lines:
- * <pre>
- * observability:
- *   bank:
- *     code: NPST
- *   environment: DEV
- *   sink:
- *     endpoint: http://logging-api:8090/api/v1/logs
- * </pre>
- * {@code service} is deliberately absent - it defaults to
- * {@code spring.application.name}.
- */
+// all observability.* settings in one place
 @ConfigurationProperties(prefix = "observability")
 public class ObservabilityProperties {
 
-    /** Master switch. When false the starter contributes no beans at all. */
     private boolean enabled = true;
 
-    /** Deployment environment stamped on every log: DEV, UAT, PROD. */
     private String environment = "DEV";
 
-    /** Emitting service name. Falls back to spring.application.name. */
     private String service;
 
+    // groups of related settings
     private final Bank bank = new Bank();
     private final Sink sink = new Sink();
     private final Trace trace = new Trace();
@@ -91,16 +71,13 @@ public class ObservabilityProperties {
         return aop;
     }
 
-    /** Identity of the institution this deployment belongs to. */
+    // which bank this deployment belongs to
     public static class Bank {
 
-        /** Short code stamped on every log line, e.g. NPST. */
         private String code;
 
-        /** Human readable name, for dashboards and reports. */
         private String name;
 
-        /** Deployment region, e.g. IN. */
         private String region;
 
         public String getCode() {
@@ -128,29 +105,15 @@ public class ObservabilityProperties {
         }
     }
 
-    /** Where structured logs are shipped for central storage. */
+    // where logs and audit records are sent
     public static class Sink {
 
-        /**
-         * Turn off to keep file/Loki logging while sending nothing over HTTP.
-         * logging-api itself sets this false so it cannot log to itself.
-         */
         private boolean enabled = true;
 
-        /** Absolute URL of the logging-api application log endpoint. */
         private String endpoint;
 
-        /**
-         * Absolute URL of the audit endpoint. Separate because audit lands in a
-         * different table with different retention and different grants.
-         */
         private String auditEndpoint;
 
-        /**
-         * Deliberately short. Logging must never become the reason a customer
-         * request hangs - the original RestTemplate had no timeout at all, so a
-         * stalled logging-api would block bank threads indefinitely.
-         */
         private Duration connectTimeout = Duration.ofMillis(500);
 
         private Duration readTimeout = Duration.ofSeconds(1);
@@ -202,25 +165,15 @@ public class ObservabilityProperties {
         }
     }
 
-    /**
-     * Hands the log to a background worker so the customer's request thread
-     * never waits on the observability platform.
-     */
+    // background queue settings
     public static class Async {
 
-        /** Set false to ship synchronously - useful in tests. */
         private boolean enabled = true;
 
-        /**
-         * Bounded on purpose. An unbounded queue turns a logging-api outage
-         * into an OutOfMemoryError in the banking service.
-         */
         private int queueCapacity = 10_000;
 
-        /** Worker threads draining the queue. One is enough for HTTP. */
         private int workers = 1;
 
-        /** How long shutdown waits for the queue to drain. */
         private Duration shutdownTimeout = Duration.ofSeconds(5);
 
         public boolean isEnabled() {
@@ -256,16 +209,11 @@ public class ObservabilityProperties {
         }
     }
 
-    /** Correlation id propagation. */
+    // trace id header and MDC key
     public static class Trace {
 
-        /**
-         * Header carrying the correlation id. The gateway generates it; each
-         * service honours it and only creates one when it is absent.
-         */
         private String header = "X-Trace-Id";
 
-        /** MDC key the id is published under, for logback patterns. */
         private String mdcKey = "traceId";
 
         public String getHeader() {
@@ -285,28 +233,15 @@ public class ObservabilityProperties {
         }
     }
 
-    /**
-     * Headers that tell us where a request came from.
-     *
-     * <p>The gateway and the mobile app set these; every value is optional, so
-     * a scheduled job or an internal call simply carries fewer of them.
-     */
+    // request headers that describe the caller
     public static class Context {
 
-        /** MOBILE, WEB, BRANCH, ATM, API. */
         private String channelHeader = "X-Channel";
 
-        /** Device fingerprint, for tying a session to a handset. */
         private String deviceHeader = "X-Device-Id";
 
-        /** CIF or customer reference of the person the request acts for. */
         private String customerHeader = "X-Customer-Id";
 
-        /**
-         * Checked in order for the caller's real address. Behind a load
-         * balancer the socket address is the balancer, not the customer, so a
-         * forwarded header has to win when present.
-         */
         private List<String> ipHeaders = List.of("X-Forwarded-For", "X-Real-IP");
 
         public String getChannelHeader() {
@@ -342,7 +277,7 @@ public class ObservabilityProperties {
         }
     }
 
-    /** The @LogRegistry aspect. */
+    // turns @LogRegistry on or off
     public static class Aop {
 
         private boolean enabled = true;
@@ -356,28 +291,14 @@ public class ObservabilityProperties {
         }
     }
 
-    /**
-     * Stops sensitive banking data reaching the log file, Loki, or MySQL.
-     *
-     * <p>The PRD's Security NFR forbids OTPs, tokens and biometric data in
-     * plaintext logs, and metadata is a free-form map - so without this a
-     * developer can put an OTP into a log with no review catching it.
-     *
-     * <p>Matching is on the normalised key (lower-cased, {@code _} and
-     * {@code -} removed) and is exact. Predictable beats clever: substring
-     * matching would have "pin" swallow "shipping".
-     */
+    // which keys are hidden or partly masked
     public static class Masking {
 
         private boolean enabled = true;
 
-        /** What a redacted value is replaced with. */
         private String placeholder = "***REDACTED***";
 
-        /**
-         * Values removed entirely. These have no diagnostic value and real
-         * regulatory consequences if they leak.
-         */
+        // values replaced completely
         private List<String> redactKeys = List.of(
                 "otp", "mpin", "tpin", "pin", "atmpin", "cardpin",
                 "password", "passwd", "pwd", "newpassword", "oldpassword",
@@ -385,16 +306,16 @@ public class ObservabilityProperties {
                 "authorization", "secret", "clientsecret", "apikey",
                 "cvv", "cvv2", "biometric", "devicesignature");
 
-        /**
-         * Values partially masked - enough to correlate a support call, not
-         * enough to identify or reuse the instrument.
-         */
+        // values partly masked, last few characters kept
         private List<String> maskKeys = List.of(
                 "accountnumber", "accountno", "account", "beneficiaryaccount",
+                "debitaccount", "creditaccount", "fromaccount", "toaccount",
                 "cardnumber", "cardno", "card",
                 "pan", "aadhaar", "aadhar",
                 "mobile", "mobilenumber", "phone", "phonenumber",
-                "email", "emailid");
+                "email", "emailid",
+                "name", "fullname", "firstname", "lastname", "customername",
+                "beneficiaryname", "accountholdername", "nomineename");
 
         public boolean isEnabled() {
             return enabled;

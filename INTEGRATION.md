@@ -1,8 +1,11 @@
 # Integrating with the Observability Platform
 
-> For a team building a Bharat Bank microservice. Spring Boot takes three YAML
-> lines and a dependency. NestJS takes about fifty lines you own, because the
-> backend is shared but the *producer* is yours.
+> For a team building a Bharat Bank microservice. Spring Boot takes a
+> dependency, a few YAML lines and a Logback include. NestJS takes about fifty
+> lines you own, because the backend is shared but the *producer* is yours.
+>
+> The code is the source of truth; this guide was corrected against it on
+> 2026-09-13.
 
 ---
 
@@ -72,7 +75,7 @@ Two guarantees worth knowing before you rely on it:
 </dependency>
 ```
 
-### Step 2 - three lines of configuration
+### Step 2 - configuration
 
 ```yaml
 observability:
@@ -86,6 +89,12 @@ observability:
 
 There is deliberately no `observability.service` - it defaults to
 `spring.application.name`, so your service names itself once.
+
+`audit-endpoint` is only needed if you use `audit = true` - but without it,
+audit records are silently not sent. For the pipeline counters in Prometheus,
+also add `io.micrometer:micrometer-registry-prometheus`, expose
+`management.endpoints.web.exposure.include: health,prometheus`, and add your
+service as a target in `infrastructure/prometheus.yml`.
 
 ### Step 3 - logging
 
@@ -137,7 +146,7 @@ commonLogger.logApplication(LogLevel.WARN, "Retrying CBS call",
         Map.of("attempt", 2, "reason", "timeout"));
 ```
 
-### Two things to know
+### Things to know
 
 - **Return `ResponseEntity`** if you want `statusCode` recorded. From anything
   else the status is not settled when the aspect runs, so it is left null
@@ -145,6 +154,24 @@ commonLogger.logApplication(LogLevel.WARN, "Retrying CBS call",
 - **Spring AOP is proxy based.** A call from one method of a bean to another
   method *on the same bean* does not pass through the proxy and is not
   intercepted. Annotate the method called from outside.
+- **Validation and security failures are not logged by the annotation.** A
+  request that fails `@Valid`, or is rejected by a security filter, never
+  reaches your method, so `@LogRegistry` never sees it - no application log, no
+  audit. Log those explicitly if you need them (failed logins and OTP attempts
+  are a PRD requirement).
+- **Jobs and listeners need their own trace id.** Outside an HTTP request MDC
+  is empty, the record goes out with `traceId: null`, and logging-api rejects it
+  with 400. Put an id into MDC for each run:
+  ```java
+  MDC.put("traceId", "JOB-" + UUID.randomUUID());
+  try { ... } finally { MDC.remove("traceId"); }
+  ```
+- **Log degraded answers yourself.** A Resilience4j fallback returns normally,
+  so the annotation records SUCCESS at INFO. Add
+  `commonLogger.logApplication(LogLevel.WARN, "CBS fallback used", ...)`.
+- **Build HTTP clients so the trace travels.** Use `RestTemplateBuilder`,
+  OpenFeign, or a WebClient with the `observabilityWebClientTraceFilter` bean. A
+  plain `new RestTemplate()` does not propagate `X-Trace-Id`.
 
 ---
 
@@ -193,19 +220,38 @@ exactly which.
 
 `timestamp` must be **ISO-8601**, not an epoch number.
 
-### A working NestJS producer
+### A NestJS producer sketch
+
+> There is no NestJS code in this repository, so this sketch has not been run.
+> It mirrors the Java starter's behaviour: bounded queue, drop-oldest, short
+> timeouts, never throw, mask before anything is written.
 
 ```typescript
 // observability.service.ts
 import { Injectable, Logger } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 
-const REDACT = ['otp', 'mpin', 'tpin', 'pin', 'password', 'token', 'cvv'];
-const MASK   = ['accountNumber', 'cardNumber', 'mobile', 'aadhaar', 'pan'];
+// Entries are lower-case with '_' and '-' removed, because keys are normalised
+// the same way before comparison. Mirrors the Java defaults in
+// ObservabilityProperties.Masking.
+const REDACT = new Set([
+  'otp', 'mpin', 'tpin', 'pin', 'atmpin', 'cardpin',
+  'password', 'passwd', 'pwd', 'newpassword', 'oldpassword',
+  'token', 'accesstoken', 'refreshtoken', 'idtoken',
+  'authorization', 'secret', 'clientsecret', 'apikey',
+  'cvv', 'cvv2', 'biometric', 'devicesignature',
+]);
+const MASK = new Set([
+  'accountnumber', 'accountno', 'account', 'beneficiaryaccount', 'debitaccount',
+  'cardnumber', 'cardno', 'card', 'pan', 'aadhaar', 'aadhar',
+  'mobile', 'mobilenumber', 'phone', 'phonenumber', 'email', 'emailid',
+]);
 
 @Injectable()
 export class ObservabilityService {
   private readonly logger = new Logger(ObservabilityService.name);
   private readonly queue: object[] = [];
+  private draining = false;
 
   constructor() {
     // Never await the send on the request path, and never let the queue grow
@@ -214,13 +260,15 @@ export class ObservabilityService {
   }
 
   log(level: string, message: string, metadata: Record<string, unknown> = {}) {
-    const store = requestContext();          // your AsyncLocalStorage
+    const store = requestContext() ?? {};    // your AsyncLocalStorage store
 
     if (this.queue.length >= 10_000) this.queue.shift();   // drop oldest
 
     this.queue.push({
       schemaVersion: '1.0',
-      traceId:     store.traceId,
+      // Required by logging-api. Outside a request (jobs, consumers) mint one,
+      // or the record is rejected with 400.
+      traceId:     store.traceId ?? randomUUID(),
       bankCode:    process.env.OBSERVABILITY_BANK_CODE ?? 'NPST',
       environment: process.env.OBSERVABILITY_ENVIRONMENT ?? 'DEV',
       service:     process.env.SERVICE_NAME,
@@ -237,19 +285,28 @@ export class ObservabilityService {
   }
 
   private async drain() {
-    while (this.queue.length) {
-      const entry = this.queue.shift();
-      try {
-        await fetch(`${process.env.OBSERVABILITY_LOGGING_ENDPOINT}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(entry),
-          signal: AbortSignal.timeout(1000),
-        });
-      } catch (error) {
-        // Log it, never throw it. A logging failure is not a banking failure.
-        this.logger.warn(`Failed to ship log: ${error}`);
+    if (this.draining) return;               // one drain loop at a time
+    this.draining = true;
+    try {
+      while (this.queue.length) {
+        const entry = this.queue.shift();
+        try {
+          const response = await fetch(`${process.env.OBSERVABILITY_LOGGING_ENDPOINT}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(entry),
+            signal: AbortSignal.timeout(1000),
+          });
+          if (!response.ok) {
+            this.logger.warn(`logging-api rejected log: HTTP ${response.status}`);
+          }
+        } catch (error) {
+          // Log it, never throw it. A logging failure is not a banking failure.
+          this.logger.warn(`Failed to ship log: ${error}`);
+        }
       }
+    } finally {
+      this.draining = false;
     }
   }
 }
@@ -260,9 +317,10 @@ function mask(value: unknown): unknown {
   if (value && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([key, inner]) => {
       const normalised = key.toLowerCase().replace(/[-_]/g, '');
-      if (REDACT.includes(normalised)) return [key, '***REDACTED***'];
-      if (MASK.includes(normalised) && typeof inner === 'string') {
-        return [key, 'X'.repeat(Math.max(0, inner.length - 4)) + inner.slice(-4)];
+      if (REDACT.has(normalised)) return [key, '***REDACTED***'];
+      if (MASK.has(normalised) && inner != null) {
+        const text = String(inner);
+        return [key, 'X'.repeat(Math.max(0, text.length - 4)) + text.slice(-4)];
       }
       return [key, mask(inner)];
     }));
@@ -273,6 +331,20 @@ function mask(value: unknown): unknown {
 
 Plus a middleware that reads the headers in section 4 into `AsyncLocalStorage`,
 and forwards `X-Trace-Id` on every outbound call.
+
+What this sketch does **not** cover yet:
+
+- **Audit.** Post `AuditIngestRequest`-shaped JSON to `/api/v1/audit`. Required:
+  `schemaVersion`, `traceId`, `bankCode`, `environment`, `service`, `actorId`,
+  `actorType`, `action`, `entity`, `timestamp`. The planned `audit-outbox` relay
+  is the natural sender. For admin actions, `actorType` is `EMPLOYEE` and
+  `actorId` comes from the validated Keycloak token, not a header.
+- **Loki.** Promtail reads `/var/log/bank/*.log`. Nest's `Logger` writes to
+  stdout, so NestJS logs will not appear in Grafana unless the service also
+  writes `{service}.log` JSON lines to that volume, or Promtail is given a
+  scrape config for container output.
+- **Exact Java parity.** Mobile, PAN and email use simpler masks than the Java
+  `MaskingUtil`.
 
 ---
 
@@ -293,6 +365,10 @@ free on `RestTemplate` (built via `RestTemplateBuilder`), Feign, and WebClient.
 Other stacks must forward `X-Trace-Id` explicitly, or the trace stops at your
 service and the journey can no longer be reconstructed.
 
+Only `X-Trace-Id` is forwarded automatically. The context headers are not, so a
+downstream service sees no channel, device or customer unless you forward them
+yourself.
+
 ---
 
 ## 5. What is masked, and what is not
@@ -301,35 +377,53 @@ Two stores, two rules. This is deliberate.
 
 | | `application_logs` + log file + Loki | `audit_logs` |
 |---|---|---|
-| OTP, PIN, password, token, CVV | `***REDACTED***` | never written |
-| Account, card, PAN, Aadhaar | `XXXXXXXX5510` | in `business_context`, masked |
+| OTP, PIN, password, token, CVV | `***REDACTED***` | not written by the annotation - but see the warning below |
+| Account, card, PAN, Aadhaar | `XXXXXXXX5510` when the key is in the mask list | **as supplied** in `business_context`, `before_state`, `after_state` |
 | Mobile number | `98XXXX3210` | **unmasked** |
 | Customer id | as supplied | **unmasked** |
-| Retention | 30 days Loki, 90 days MySQL | years, never purged |
+| Retention | 7 days file, 30 days Loki, 90 days MySQL once the purge job is enabled (off by default) | never purged |
+
+> **Warning - the audit copy is not masked at all.** It is taken before masking
+> runs, so whatever you put into `AuditContext` (`put`, `beforeState`,
+> `afterState`) is stored verbatim. Never put an OTP, PIN or full card number
+> there, and treat account numbers there as a policy decision.
 
 An audit trail that cannot identify the customer is not an audit trail - a
 regulator asking who moved money cannot work with `XXXXXXXX5510`. An
 application log has no such need, and the file feeding Loki has no access
 control of its own, so it stays masked.
 
-**Because `audit_logs` holds unmasked identity, it is append-only and enforced
-three ways**: `@Immutable` in JPA, an INSERT/SELECT-only grant, and a database
-trigger that rejects `UPDATE` and `DELETE` outright. Each row is also hash
+**Because `audit_logs` holds unmasked identity, it is append-only**: `@Immutable`
+in JPA and a database trigger that rejects `UPDATE` and `DELETE` outright. The
+INSERT/SELECT-only grant is designed but **not yet applied** - the application
+user still holds ALL PRIVILEGES. Each row is also hash
 chained to its predecessor, so tampering is detectable even by someone who
 drops the triggers.
 
-Add your own sensitive keys:
+Add your own sensitive keys. **Setting a list replaces the default list**, so
+copy the full defaults from `ObservabilityProperties.Masking` and add to them -
+a short list would silently drop keys such as `pin`, `authorization` and
+`refreshtoken`:
 
 ```yaml
 observability:
   masking:
-    redact-keys: [otp, mpin, tpin, password, token, cvv, myCustomSecret]
-    mask-keys:   [accountNumber, cardNumber, pan, aadhaar, mobile, email]
+    redact-keys: [otp, mpin, tpin, pin, atmpin, cardpin, password, passwd, pwd,
+                  newpassword, oldpassword, token, accesstoken, refreshtoken,
+                  idtoken, authorization, secret, clientsecret, apikey, cvv,
+                  cvv2, biometric, devicesignature, myCustomSecret]
+    mask-keys:   [accountnumber, accountno, account, beneficiaryaccount,
+                  cardnumber, cardno, card, pan, aadhaar, aadhar, mobile,
+                  mobilenumber, phone, phonenumber, email, emailid, debitaccount]
 ```
 
 Matching is **exact** on the normalised key - lower-cased with `_` and `-`
 removed. So `accountNumber`, `account_number` and `ACCOUNT-NUMBER` all match,
-but `pin` does not swallow `shipping`.
+but `pin` does not swallow `shipping`. The flip side: an unlisted name is not
+masked at all. The defaults do not include `debitAccount`, so the sample's
+`TransferRequest.debitAccount` is logged in full unless you add it as above.
+Only `metadata` is masked - not the `message` text, plain SLF4J lines, or
+request URIs such as `/api/v1/accounts/{accountNumber}/balance`.
 
 ---
 
@@ -352,10 +446,17 @@ curl "http://localhost:8090/api/v1/audit?action=FUND_TRANSFER&businessRef=IMPS21
 Full contract at **http://localhost:8090/swagger-ui.html**.
 
 In Grafana, the *Layer 1 - Application Logging* dashboard is provisioned
-automatically. `bankCode`, `service`, `environment`, `channel` and `level` are
-Loki labels; `traceId` deliberately is not - it is unique per request, and
-labelling it would create a stream per request and bring Loki down. It is
-carried as structured metadata and stays filterable.
+automatically (the Compose stack has not been run yet). Promtail sets the Loki
+labels `job`, `bank_code`, `service`, `environment`, `channel`, `event_type`
+and `event_level` - the last six only on SDK lines, because they are parsed
+from the structured event nested inside `message`. `trace_id` deliberately is
+not a label - it is unique per request, and labelling it would create a stream
+per request and bring Loki down. It is carried as structured metadata:
+
+```
+{job="observability", service="sample-bank-app"} | trace_id="RUN-TXN-OK"
+{job="observability"} |= "RUN-TXN-OK"      # also finds plain, non-SDK lines
+```
 
 ---
 
@@ -434,14 +535,16 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 
 **`400 validation failed`.** The response names every missing field. If it lists
 `bankCode`, `environment` or `service`, your `observability.*` config is not
-being read.
+being read. If it lists only `traceId`, the record was written outside an HTTP
+request - a job or a listener - see "Things to know" in section 2.
 
 **`422 unsupported event type`.** You sent AUDIT or ERROR to `/api/v1/logs`.
 Audit goes to `/api/v1/audit`; error events are not persisted in Layer 1.
 
 **`@LogRegistry` does nothing.** Either the method is called from within the
 same bean (Spring AOP is proxy based), or `observability.aop.enabled` is false,
-or `spring-boot-starter-aop` was excluded.
+or `spring-boot-starter-aop` was excluded, or the request failed `@Valid` or a
+security check before the method ran.
 
 **Nothing in Grafana.** Confirm Promtail can see the file - it reads
 `/var/log/bank/*.log`, which is the `app_logs` volume. If your service writes

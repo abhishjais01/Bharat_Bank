@@ -5,7 +5,7 @@ import com.npst.loggingapi.entity.ApplicationLog;
 import java.time.Instant;
 import java.util.Map;
 
-/** One stored application log, as production support sees it. */
+// application log as returned by the search API
 public record ApplicationLogResponse(
         Long id,
         String traceId,

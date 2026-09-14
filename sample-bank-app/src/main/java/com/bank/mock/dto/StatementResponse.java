@@ -4,10 +4,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
-/**
- * US-08. A period with no activity is a valid statement, not an error - the
- * PRD calls for an empty-state result rather than a failure.
- */
+// statement for a date range
 public record StatementResponse(String accountNumber,
                                 LocalDate from,
                                 LocalDate to,

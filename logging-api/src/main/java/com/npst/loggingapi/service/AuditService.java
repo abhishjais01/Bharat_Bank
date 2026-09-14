@@ -7,6 +7,7 @@ import com.npst.observability.contract.AuditIngestRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+// saves audit records and links them into the hash chain
 @Service
 public class AuditService {
 
@@ -22,25 +23,23 @@ public class AuditService {
         this.hasher = hasher;
     }
 
-    /**
-     * Appends one audit record to the chain.
-     *
-     * <p>Transactional because reading the chain tip and writing the next link
-     * have to be one atomic step; the repository takes a write lock on the tip
-     * so two concurrent writers cannot both claim the same parent.
-     */
+    // one transaction: read the last hash, build the row, hash it, insert it
     @Transactional
     public Long append(AuditIngestRequest request) {
 
+        // chain tip is read under a write lock so two inserts can't get the same parent hash
         String previousHash = repository.findChainTipForUpdate()
                 .map(AuditLog::getRowHash)
                 .orElse(null);
 
+        // request -> row (private details masked)
         AuditLog entry = mapper.toEntity(request);
 
+        // link to the previous row and seal this one
         entry.setPrevHash(previousHash);
         entry.setRowHash(hasher.hash(previousHash, entry));
 
+        // insert; the lock is released on commit
         return repository.save(entry).getId();
     }
 }

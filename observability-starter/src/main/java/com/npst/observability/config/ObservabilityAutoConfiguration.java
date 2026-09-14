@@ -32,26 +32,14 @@ import org.springframework.core.env.Environment;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
-/**
- * Wires the whole observability platform.
- *
- * <p>This class is the reason the starter is reusable. Previously the beans
- * were plain {@code @Component}s under {@code com.npst.observability}, so they
- * were discovered only because the sample application happened to share that
- * base package. Any real banking service - {@code com.bank.accounts} and the
- * like - would have started without a {@code CommonLogger} and failed on
- * injection.
- *
- * <p>Every bean is {@code @ConditionalOnMissingBean}, so a service can replace
- * any single piece without forking, and the whole configuration is gated on
- * {@code observability.enabled}.
- */
+// creates all starter beans automatically in any Spring Boot app that adds this dependency
 @AutoConfiguration
 @EnableConfigurationProperties(ObservabilityProperties.class)
 @ConditionalOnProperty(prefix = "observability", name = "enabled",
         havingValue = "true", matchIfMissing = true)
 public class ObservabilityAutoConfiguration {
 
+    // bank, environment and service name from config
     @Bean
     @ConditionalOnMissingBean
     public BankResolver bankResolver(ObservabilityProperties properties,
@@ -59,26 +47,21 @@ public class ObservabilityAutoConfiguration {
         return new PropertyBankResolver(properties, environment);
     }
 
+    // masking rules for sensitive values
     @Bean
     @ConditionalOnMissingBean
     public MetadataMasker metadataMasker(ObservabilityProperties properties) {
         return new MetadataMasker(properties.getMasking());
     }
 
+    // trace id header for outgoing calls
     @Bean
     @ConditionalOnMissingBean
     public TraceRestTemplateInterceptor traceRestTemplateInterceptor() {
         return new TraceRestTemplateInterceptor();
     }
 
-    /**
-     * Propagates the correlation id on every RestTemplate the application
-     * builds through RestTemplateBuilder.
-     *
-     * <p>Note what is deliberately absent: a {@code RestTemplate} bean. The
-     * starter used to publish one, which then silently became the host
-     * application's own RestTemplate. A library must not claim that name.
-     */
+    // adds the trace interceptor to every RestTemplate built with RestTemplateBuilder
     @Bean
     @ConditionalOnClass(RestTemplateCustomizer.class)
     @ConditionalOnMissingBean(name = "observabilityTraceRestTemplateCustomizer")
@@ -87,19 +70,8 @@ public class ObservabilityAutoConfiguration {
         return restTemplate -> restTemplate.getInterceptors().add(interceptor);
     }
 
-    /**
-     * The sink chain: an HTTP sink to logging-api, wrapped by default in a
-     * bounded async queue so a customer's request thread never waits on - or
-     * fails because of - the observability platform.
-     *
-     * <p>Built in one bean method on purpose. Exposing the HTTP sink as a
-     * separate bean looked tidier but was a trap: HttpLogSink <em>is</em> a
-     * LogSink, so {@code @ConditionalOnMissingBean(LogSink.class)} on the
-     * wrapper saw it and silently skipped the async layer, leaving every log
-     * shipping inline on the request thread. One bean, one type, no ambiguity
-     * - and an application overriding {@link LogSink} replaces the whole chain,
-     * which is the sane unit of replacement anyway.
-     */
+    // HttpLogSink and AsyncLogSink are built in one bean on purpose. As separate beans,
+    // @ConditionalOnMissingBean(LogSink.class) would match HttpLogSink and skip the async wrapper.
     @Bean
     @ConditionalOnMissingBean(LogSink.class)
     public LogSink logSink(ObservabilityProperties properties,
@@ -109,6 +81,7 @@ public class ObservabilityAutoConfiguration {
 
         MeterRegistry registry = meterRegistry.getIfAvailable();
 
+        // HTTP sender, wrapped in a background queue unless async is turned off
         HttpLogSink httpSink = new HttpLogSink(properties, interceptor,
                 resolveMapper(objectMapper), registry);
 
@@ -119,6 +92,7 @@ public class ObservabilityAutoConfiguration {
         return new AsyncLogSink(httpSink, properties.getSink().getAsync(), registry);
     }
 
+    // main logger used by the aspect and by services directly
     @Bean
     @ConditionalOnMissingBean
     public CommonLogger commonLogger(ObjectProvider<ObjectMapper> objectMapper,
@@ -130,6 +104,7 @@ public class ObservabilityAutoConfiguration {
                 logSink, masker, properties);
     }
 
+    // filter that reads the trace id and caller headers on every request
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     @ConditionalOnMissingBean(name = "observabilityRequestContextFilterRegistration")
@@ -139,14 +114,14 @@ public class ObservabilityAutoConfiguration {
         FilterRegistrationBean<RequestContextFilter> registration =
                 new FilterRegistrationBean<>(new RequestContextFilter(properties));
 
-        // First in the chain: everything logged afterwards must already carry
-        // the correlation id and the caller's context.
+        // run first so everything after it already has the trace id
         registration.setOrder(Ordered.HIGHEST_PRECEDENCE);
         registration.addUrlPatterns("/*");
 
         return registration;
     }
 
+    // writes request start and end lines
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     @ConditionalOnMissingBean
@@ -154,6 +129,7 @@ public class ObservabilityAutoConfiguration {
         return new LoggingInterceptor();
     }
 
+    // registers the interceptor with Spring MVC
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     @ConditionalOnMissingBean(name = "observabilityWebMvcConfigurer")
@@ -166,11 +142,7 @@ public class ObservabilityAutoConfiguration {
         };
     }
 
-    /**
-     * Drives {@code @LogRegistry}. Conditional on AspectJ so a service that
-     * excludes spring-boot-starter-aop still starts, just without the
-     * annotation support.
-     */
+    // the aspect behind @LogRegistry (turn off with observability.aop.enabled=false)
     @Bean
     @ConditionalOnClass(org.aspectj.lang.ProceedingJoinPoint.class)
     @ConditionalOnProperty(prefix = "observability.aop", name = "enabled",
@@ -181,10 +153,7 @@ public class ObservabilityAutoConfiguration {
         return new LogRegistryAspect(commonLogger, resolveMapper(objectMapper));
     }
 
-    /**
-     * Off by default - see {@link GlobalExceptionHandler}. A starter has no
-     * business handling the host application's exceptions unless asked to.
-     */
+    // optional catch-all exception handler, off by default
     @Bean
     @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     @ConditionalOnProperty(prefix = "observability.exception-handler", name = "enabled",
@@ -194,15 +163,12 @@ public class ObservabilityAutoConfiguration {
         return new GlobalExceptionHandler();
     }
 
+    // use the app's ObjectMapper if it has one
     private static ObjectMapper resolveMapper(ObjectProvider<ObjectMapper> provider) {
         return provider.getIfAvailable(ObservabilityAutoConfiguration::defaultObjectMapper);
     }
 
-    /**
-     * Fallback for a non-web application, where Spring Boot contributes no
-     * ObjectMapper. JavaTimeModule matters: without it an Instant is written as
-     * an epoch number instead of ISO-8601.
-     */
+    // fallback mapper that writes dates as ISO text
     private static ObjectMapper defaultObjectMapper() {
         return new ObjectMapper()
                 .registerModule(new JavaTimeModule())

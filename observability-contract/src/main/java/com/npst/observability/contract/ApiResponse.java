@@ -5,13 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import java.time.Instant;
 import java.util.List;
 
-/**
- * Standard envelope for every logging-api response, success or failure.
- *
- * <p>Carries the traceId so a support engineer looking at a rejected log can
- * correlate it with the request that produced it - the previous response
- * ({@code status} + {@code logId}) gave them nothing to search on.
- */
+// common response wrapper returned by every logging-api endpoint
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ApiResponse<T> {
 
@@ -24,7 +18,6 @@ public class ApiResponse<T> {
     private Instant timestamp;
     private T data;
 
-    /** Field-level validation failures. Null on success. */
     private List<String> errors;
 
     public ApiResponse() {
@@ -39,14 +32,17 @@ public class ApiResponse<T> {
         this.timestamp = Instant.now();
     }
 
+    // builds a success response
     public static <T> ApiResponse<T> success(String message, String traceId, T data) {
         return new ApiResponse<>(SUCCESS, message, traceId, data, null);
     }
 
+    // builds an error response with the list of problems
     public static <T> ApiResponse<T> error(String message, String traceId, List<String> errors) {
         return new ApiResponse<>(ERROR, message, traceId, null, errors);
     }
 
+    // getters and setters
     public String getStatus() {
         return status;
     }

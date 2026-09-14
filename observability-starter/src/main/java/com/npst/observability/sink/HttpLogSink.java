@@ -18,21 +18,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 
-/**
- * Ships one application log to the central logging-api over plain HTTP.
- *
- * <p>Two properties matter more than what it does:
- *
- * <ul>
- *   <li>It owns a private RestTemplate <em>with timeouts</em>. The starter no
- *       longer publishes a RestTemplate bean, and the old shared instance had
- *       no timeout at all - a stalled logging-api would block bank request
- *       threads indefinitely.</li>
- *   <li>A failure can never surface to the caller, but is never silent
- *       either. The original code swallowed every exception without logging,
- *       so a rejected log looked identical to a delivered one.</li>
- * </ul>
- */
+// posts records to logging-api over HTTP
 public class HttpLogSink implements LogSink {
 
     private static final Logger log = LoggerFactory.getLogger(HttpLogSink.class);
@@ -42,6 +28,7 @@ public class HttpLogSink implements LogSink {
     private final Counter sent;
     private final Counter failed;
 
+    // RestTemplate with short timeouts and the shared JSON mapper
     public HttpLogSink(ObservabilityProperties properties,
                        TraceRestTemplateInterceptor traceInterceptor,
                        ObjectMapper objectMapper,
@@ -56,10 +43,6 @@ public class HttpLogSink implements LogSink {
         this.restTemplate = new RestTemplate(factory);
         this.restTemplate.setInterceptors(List.of(traceInterceptor));
 
-        // Serialize with the same ObjectMapper that writes the file log, so
-        // wire format and file format cannot drift - notably the Instant
-        // timestamp, which a default mapper emits as an epoch number rather
-        // than ISO-8601, and logging-api would reject every line.
         this.restTemplate.getMessageConverters()
                 .removeIf(MappingJackson2HttpMessageConverter.class::isInstance);
         this.restTemplate.getMessageConverters()
@@ -71,18 +54,22 @@ public class HttpLogSink implements LogSink {
                 "Logs rejected by logging-api or lost in transit");
     }
 
+    // application logs go to /api/v1/logs
     @Override
     public void send(LogIngestRequest request) {
         post(properties.getSink().getEndpoint(), request, request.getTraceId(), "log");
     }
 
+    // audit records go to /api/v1/audit
     @Override
     public void sendAudit(AuditIngestRequest request) {
         post(properties.getSink().getAuditEndpoint(), request, request.getTraceId(), "audit");
     }
 
+    // one POST; failures are counted and logged, never thrown
     private void post(String endpoint, Object payload, String traceId, String kind) {
 
+        // sending turned off or no URL configured
         if (!properties.getSink().isEnabled() || endpoint == null || endpoint.isBlank()) {
             return;
         }
@@ -96,10 +83,9 @@ public class HttpLogSink implements LogSink {
             SinkMetrics.increment(sent);
 
         } catch (Exception ex) {
+            // count and log it, but never throw back to the caller
             SinkMetrics.increment(failed);
 
-            // Never propagate, never stay silent. The original code swallowed
-            // everything, so a rejected record looked like a delivered one.
             log.warn("Failed to ship {} to {} : traceId={} reason={}",
                     kind, endpoint, traceId, ex.getMessage());
         }

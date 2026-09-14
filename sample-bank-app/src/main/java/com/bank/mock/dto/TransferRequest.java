@@ -6,7 +6,7 @@ import jakarta.validation.constraints.NotNull;
 
 import java.math.BigDecimal;
 
-/** US-10: an IMPS transfer. */
+// IMPS transfer request
 public record TransferRequest(
         @NotBlank String debitAccount,
         @NotBlank String beneficiaryAccount,

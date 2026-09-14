@@ -32,11 +32,6 @@
 
     <build>
         <plugins>
-            <!--
-                Fail fast, and with a readable message, when the build runs on
-                the wrong JDK. Without this Maven reports the unhelpful
-                "release version 21 not supported".
-            -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>

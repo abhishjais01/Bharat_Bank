@@ -21,22 +21,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 import java.util.UUID;
 
-/**
- * Funds transfer from the PRD, US-10.
- *
- * <p>The richest journey in the platform, because it produces every log level
- * the search API needs to be able to distinguish:
- *
- * <ul>
- *   <li>success - INFO, plus an audit record with the amount</li>
- *   <li>insufficient funds, limit exceeded, unknown beneficiary - WARN. The PRD
- *       requires failed transfers to be clearly explained, and these are the
- *       system refusing correctly, not the system breaking</li>
- *   <li>CBS unavailable - ERROR. Something is genuinely wrong</li>
- *   <li>pending - INFO. Shown immediately and reconciled asynchronously, so the
- *       customer is never left on a spinner</li>
- * </ul>
- */
+// fund transfer endpoints
 @RestController
 @RequestMapping("/api/v1/transfers")
 public class TransferController {
@@ -52,6 +37,7 @@ public class TransferController {
         this.perTransactionLimit = limit;
     }
 
+    // IMPS transfer; every outcome is logged and audited
     @PostMapping("/imps")
     @LogRegistry(action = "FUND_TRANSFER", module = "PAYMENTS", entity = "TRANSFER",
             audit = true, logArguments = true,
@@ -61,18 +47,18 @@ public class TransferController {
     public ResponseEntity<TransferResponse> imps(@Valid @RequestBody TransferRequest request,
                                                  @RequestParam(required = false) String simulate) {
 
+        // transaction reference
         String reference = "IMPS" + UUID.randomUUID().toString()
                 .substring(0, 8).toUpperCase();
 
-        // Declared before anything can fail, so a rejected transfer still
-        // records what was attempted. An audit trail that only captures
-        // successes is not much of an audit trail.
+        // audit details, set before any check so failed attempts are recorded too
         AuditContext.amount(request.amount(), "INR");
         AuditContext.businessRef(reference);
         AuditContext.entityId(reference);
         AuditContext.put("transferType", "IMPS");
         AuditContext.put("beneficiaryAccount", request.beneficiaryAccount());
 
+        // business checks: these throw and are logged as WARN
         if (UNKNOWN_BENEFICIARY.equals(request.beneficiaryAccount())) {
             throw new InvalidBeneficiaryException(
                     "Beneficiary account is not registered or is still in its cooling-off period");
@@ -84,16 +70,17 @@ public class TransferController {
                             + perTransactionLimit);
         }
 
+        // simulated pending transfer
         if ("PENDING".equals(simulate)) {
-            // Settlement is not immediate. The customer is told so now and
-            // notified when reconciliation resolves it.
             return ResponseEntity.accepted().body(new TransferResponse(
                     reference, null, "PENDING", request.amount(), "INR",
                     "Transfer initiated. You will be notified once it completes."));
         }
 
+        // debit the account in CBS
         String cbsReference = cbs.debit(request.debitAccount(), request.amount(), simulate);
 
+        // success: add the CBS reference and return 201
         AuditContext.put("cbsReference", cbsReference);
 
         return ResponseEntity.status(HttpStatus.CREATED).body(new TransferResponse(

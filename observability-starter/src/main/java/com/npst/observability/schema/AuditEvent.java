@@ -5,55 +5,41 @@ import com.npst.observability.contract.EventType;
 import java.math.BigDecimal;
 import java.util.Map;
 
-/**
- * Who did what, to which record, from where, and what the system answered.
- *
- * <p>Extends {@link LogEvent}, so it already carries traceId, bank, environment,
- * service and the request context - channel, device, IP, customer - captured at
- * the edge. What it adds is the audit-specific half: the actor, the action, the
- * API call, and the business fields a compliance query filters on.
- */
+// internal audit record: who did what, to which record, and the result
 public class AuditEvent extends LogEvent {
 
-    // --- who -----------------------------------------------------------------
-
+    // who
     private String actorId;
     private String actorType;
 
-    // --- what ----------------------------------------------------------------
-
+    // what
     private String action;
     private String module;
     private String entity;
     private String entityId;
     private String description;
 
-    /**
-     * Unmasked, unlike the customer identifiers on an application log. An audit
-     * trail that cannot identify the customer is not an audit trail.
-     */
+    // customer mobile (masked before sending)
     private String mobileNumber;
 
-    // --- the API call --------------------------------------------------------
-
+    // API call and result
     private String apiEndpoint;
     private String apiMethod;
     private Integer statusCode;
     private String responseMessage;
     private Long durationMs;
 
-    // --- business fields -----------------------------------------------------
-
+    // business details
     private String businessRef;
     private BigDecimal amount;
     private String currency;
     private Map<String, Object> businessContext;
 
-    // --- state transition, per the PRD's Auditability NFR ---------------------
-
+    // state before and after the change
     private Map<String, Object> beforeState;
     private Map<String, Object> afterState;
 
+    // every audit event has type AUDIT
     public AuditEvent() {
         setEventType(EventType.AUDIT);
     }

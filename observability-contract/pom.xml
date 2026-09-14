@@ -23,8 +23,6 @@
 
     <dependencies>
 
-        <!-- Validation annotations travel with the contract, so the producer
-             and the consumer enforce exactly the same rules. -->
         <dependency>
             <groupId>jakarta.validation</groupId>
             <artifactId>jakarta.validation-api</artifactId>

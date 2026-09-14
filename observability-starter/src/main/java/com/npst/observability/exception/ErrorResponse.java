@@ -2,6 +2,7 @@ package com.npst.observability.exception;
 
 import java.time.LocalDateTime;
 
+// error body used by GlobalExceptionHandler
 public class ErrorResponse {
 
     private String traceId;

@@ -6,22 +6,24 @@ import com.npst.observability.contract.LogLevel;
 import java.time.Instant;
 import java.util.Map;
 
+// internal log record, written to the log file as JSON
 public class LogEvent {
 
     private Instant timestamp;
     private String traceId;
 
+    // which bank and service
     private String bankCode;
     private String environment;
     private String service;
 
-    // Where the request came from. Captured once at the edge by
-    // RequestContextFilter; all optional.
+    // caller details
     private String channel;
     private String deviceId;
     private String ipAddress;
     private String customerId;
 
+    // type, level and message
     private EventType eventType;
     private LogLevel level;
 
@@ -32,6 +34,7 @@ public class LogEvent {
 
     private Map<String, Object> metadata;
 
+    // timestamp is set when the event is created
     public LogEvent() {
         this.timestamp = Instant.now();
     }

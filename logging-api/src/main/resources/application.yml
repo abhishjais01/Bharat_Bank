@@ -14,13 +14,9 @@ spring:
     hikari:
       pool-name: logging-api-pool
       maximum-pool-size: ${DB_POOL_SIZE:10}
-      # A log write must never sit waiting for a connection; the producer has
-      # already moved on and the queue behind it is bounded.
       connection-timeout: 3000
 
   jpa:
-    # Flyway owns the schema. validate turns a drift between the migration and
-    # the entity into a startup failure instead of a silent runtime surprise.
     hibernate:
       ddl-auto: validate
 
@@ -30,8 +26,6 @@ spring:
     properties:
       hibernate:
         jdbc:
-          # Ingest is one row at a time today, but the batch is set up for the
-          # bulk insert Step 5's volumes will want.
           batch_size: 50
         order_inserts: true
 
@@ -39,15 +33,11 @@ spring:
     web:
       pageable:
         default-page-size: 50
-        # Capped so one careless client cannot ask for a million rows and take
-        # the log service down for everyone.
         max-page-size: 200
 
   flyway:
     enabled: true
     locations: classpath:db/migration
-    # This service owns the observability database outright, so there is no
-    # pre-existing schema to baseline against.
     baseline-on-migrate: false
 
 springdoc:
@@ -75,11 +65,6 @@ logging:
   level:
     root: INFO
 
-# ---------------------------------------------------------------------------
-# logging-api uses the starter for tracing and structured file logs, but must
-# never ship logs to itself - that would be an infinite loop through its own
-# ingest endpoint.
-# ---------------------------------------------------------------------------
 observability:
 
   environment: ${OBSERVABILITY_ENVIRONMENT:DEV}
@@ -89,14 +74,10 @@ observability:
     name: Bharat Bank
     region: IN
 
+  # logging-api must not send its own logs to itself
   sink:
     enabled: false
 
-  # -------------------------------------------------------------------------
-  # Retention. Scoped to application_logs only - audit_logs is never purged
-  # here, and the append-only triggers would refuse the DELETE regardless.
-  # Off by default: how long a bank keeps its logs is the bank's decision.
-  # -------------------------------------------------------------------------
   retention:
     enabled: ${LOG_RETENTION_ENABLED:false}
     period: ${LOG_RETENTION_PERIOD:P90D}

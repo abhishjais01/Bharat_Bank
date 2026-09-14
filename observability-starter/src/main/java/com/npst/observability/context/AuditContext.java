@@ -4,32 +4,7 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * Lets a business method contribute the details only it can know.
- *
- * <p>{@code @LogRegistry} supplies the constants and the aspect supplies what
- * it can observe from outside - duration, outcome, status code. Neither can
- * know that this particular transfer moved 5,000 rupees under reference
- * IMPS20260909001. Without a seam like this the amount and business_ref columns
- * would exist and always be null.
- *
- * <pre>
- * &#64;LogRegistry(action = "FUND_TRANSFER", module = "PAYMENTS", audit = true)
- * public TransferResponse transfer(TransferRequest request) {
- *
- *     AuditContext.amount(request.amount(), "INR");
- *     AuditContext.businessRef(reference);
- *     AuditContext.entityId(transactionId);
- *
- *     return ...;
- * }
- * </pre>
- *
- * <p>Thread-local, drained by the aspect when the method returns, and cleared
- * whether the method succeeded or threw - a value left behind would attach
- * itself to the next unrelated transaction on that thread, which in a banking
- * audit trail is worse than having no value at all.
- */
+// lets a controller add audit details (amount, reference, state) for the current call
 public final class AuditContext {
 
     private static final ThreadLocal<Details> CURRENT = new ThreadLocal<>();
@@ -37,49 +12,42 @@ public final class AuditContext {
     private AuditContext() {
     }
 
-    /** Monetary value of the operation, with its ISO 4217 currency. */
+    // setters used inside the business method
     public static void amount(BigDecimal amount, String currency) {
         Details details = current();
         details.amount = amount;
         details.currency = currency;
     }
 
-    /** The reference a customer or the business would quote. */
     public static void businessRef(String businessRef) {
         current().businessRef = businessRef;
     }
 
-    /** Identifier of the record acted upon. */
     public static void entityId(String entityId) {
         current().entityId = entityId;
     }
 
-    /** The customer this acted for, when it is not on the request headers. */
     public static void customerId(String customerId) {
         current().customerId = customerId;
     }
 
-    /** Unmasked in the audit table, masked in the log file. */
     public static void mobileNumber(String mobileNumber) {
         current().mobileNumber = mobileNumber;
     }
 
-    /** Any domain-specific field with no column of its own. */
     public static void put(String key, Object value) {
         current().businessContext.put(key, value);
     }
 
-    /** State before the change, for actions that alter a record. */
     public static void beforeState(Map<String, Object> state) {
         current().beforeState = state;
     }
 
-    /** State after the change. */
     public static void afterState(Map<String, Object> state) {
         current().afterState = state;
     }
 
-    /** Whatever the method contributed, or null. Clears as it reads. */
+    // read and clear; called by the aspect when the method finishes
     public static Details drain() {
 
         Details details = CURRENT.get();
@@ -88,11 +56,12 @@ public final class AuditContext {
         return details;
     }
 
-    /** Discards anything set on this thread. */
+    // clear without reading
     public static void clear() {
         CURRENT.remove();
     }
 
+    // details for this thread, created on first use
     private static Details current() {
 
         Details details = CURRENT.get();
@@ -105,7 +74,7 @@ public final class AuditContext {
         return details;
     }
 
-    /** What a business method contributed for this one call. */
+    // values collected for one call
     public static final class Details {
 
         private BigDecimal amount;

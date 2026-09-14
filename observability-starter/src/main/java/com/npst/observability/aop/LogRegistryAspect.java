@@ -22,20 +22,7 @@ import org.springframework.http.ResponseEntity;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-/**
- * Turns a {@link LogRegistry} annotation into a complete log record.
- *
- * <p>Two rules govern everything here:
- *
- * <ol>
- *   <li><b>The business method's behaviour is never altered.</b> A thrown
- *       exception is re-thrown exactly as it was; the return value is passed
- *       through untouched. This aspect observes, it does not participate.</li>
- *   <li><b>A logging failure never becomes a banking failure.</b> Everything
- *       the aspect does for itself is wrapped, so a bug in log assembly cannot
- *       take down a fund transfer.</li>
- * </ol>
- */
+// runs around @LogRegistry methods and turns each call into a log and audit record
 @Aspect
 public class LogRegistryAspect {
 
@@ -49,14 +36,17 @@ public class LogRegistryAspect {
         this.objectMapper = objectMapper;
     }
 
+    // wraps the method: run it, then record what happened
     @Around("@annotation(logRegistry)")
     public Object around(ProceedingJoinPoint joinPoint, LogRegistry logRegistry) throws Throwable {
 
+        // start the timer
         long startedAt = System.nanoTime();
 
         Object result = null;
         Throwable failure = null;
 
+        // run the real method; any exception is passed on unchanged
         try {
             result = joinPoint.proceed();
             return result;
@@ -66,13 +56,13 @@ public class LogRegistryAspect {
             throw thrown;
 
         } finally {
+            // runs after success and after failure
             long durationMs = (System.nanoTime() - startedAt) / 1_000_000;
 
-            // Drained here, not inside record(), so it is cleared even if
-            // recording itself fails. A leftover amount attaching to the next
-            // unrelated transaction on this thread would be worse than none.
+            // drain here so values never leak into the next request on this thread
             AuditContext.Details contributed = AuditContext.drain();
 
+            // a logging failure must never break the business call
             try {
                 record(joinPoint, logRegistry, result, failure, durationMs, contributed);
             } catch (Exception loggingFailure) {
@@ -82,6 +72,7 @@ public class LogRegistryAspect {
         }
     }
 
+    // writes the application log, then the audit record if needed
     private void record(ProceedingJoinPoint joinPoint,
                         LogRegistry annotation,
                         Object result,
@@ -93,7 +84,7 @@ public class LogRegistryAspect {
 
         Map<String, Object> metadata = new LinkedHashMap<>();
 
-        // --- constant: fixed by the annotation, true of every invocation ----
+        // values from the annotation
         metadata.put("action", annotation.action());
         metadata.put("module", annotation.module());
 
@@ -101,7 +92,7 @@ public class LogRegistryAspect {
             metadata.put("entity", annotation.entity());
         }
 
-        // --- runtime: only knowable during this particular execution --------
+        // values from this call
         metadata.put("operation", joinPoint.getSignature().toShortString());
         metadata.put("durationMs", durationMs);
         metadata.put("outcome", failed ? "FAILURE" : "SUCCESS");
@@ -111,11 +102,13 @@ public class LogRegistryAspect {
             metadata.put("statusCode", statusCode);
         }
 
+        // error details when the method threw
         if (failed) {
             metadata.put("exception", failure.getClass().getName());
             metadata.put("responseMessage", failure.getMessage());
         }
 
+        // optional arguments and return value
         if (annotation.logArguments()) {
             metadata.put("arguments", argumentsOf(joinPoint));
         }
@@ -124,24 +117,21 @@ public class LogRegistryAspect {
             metadata.put("result", asLoggable(result));
         }
 
-        // Masking happens inside CommonLogger, so anything sensitive that came
-        // in through arguments or the result is scrubbed before it is written.
+        // exceptions listed in warnOn are business rejections (WARN), anything else is ERROR
         LogLevel level = failed ? failureLevel(annotation, failure) : annotation.level();
 
+        // write the application log
         commonLogger.logApplication(level,
                 annotation.action() + (failed ? " failed" : " completed"),
                 metadata);
 
+        // audit record only for audited actions
         if (annotation.audit()) {
             writeAudit(annotation, failed, failure, statusCode, durationMs, contributed);
         }
     }
 
-    /**
-     * Builds the audit record. Everything the annotation cannot know - who the
-     * actor was, which endpoint was called, what the system answered, how long
-     * it took - is filled in from the request context and this execution.
-     */
+    // builds the audit record: who did what, to which record, and the result
     private void writeAudit(LogRegistry annotation,
                             boolean failed,
                             Throwable failure,
@@ -151,19 +141,17 @@ public class LogRegistryAspect {
 
         AuditEvent event = new AuditEvent();
 
-        // The header wins; a method can supply the customer when the call did
-        // not arrive with one, such as a login that resolves it mid-flight.
+        // actor: customer from the request header, else from AuditContext, else SYSTEM
         String customerId = RequestContext.customerId() != null
                 ? RequestContext.customerId()
                 : contributed == null ? null : contributed.getCustomerId();
 
-        // SYSTEM covers scheduled jobs and internal service-to-service calls,
-        // which have no customer acting behind them.
         event.setActorId(orDefault(customerId, ActorType.SYSTEM.name()));
         event.setActorType(customerId == null
                 ? ActorType.SYSTEM.name()
                 : ActorType.CUSTOMER.name());
 
+        // what was done
         event.setAction(annotation.action());
         event.setModule(annotation.module());
         event.setEntity(annotation.entity().isBlank()
@@ -171,10 +159,12 @@ public class LogRegistryAspect {
                 : annotation.entity());
         event.setDescription(annotation.action() + (failed ? " failed" : " completed"));
 
+        // result of the call
         event.setStatusCode(statusCode);
         event.setResponseMessage(failed ? failure.getMessage() : null);
         event.setDurationMs(durationMs);
 
+        // which API was called
         HttpServletRequest request = currentRequest();
 
         if (request != null) {
@@ -182,6 +172,7 @@ public class LogRegistryAspect {
             event.setApiMethod(request.getMethod());
         }
 
+        // details the controller added through AuditContext
         if (contributed != null) {
             event.setEntityId(contributed.getEntityId());
             event.setAmount(contributed.getAmount());
@@ -197,13 +188,11 @@ public class LogRegistryAspect {
             }
         }
 
+        // mask and send the audit record
         commonLogger.audit(event);
     }
 
-    /**
-     * The servlet request for this call, when there is one. A scheduled job or
-     * an async worker has none, and that is not an error.
-     */
+    // current HTTP request, or null outside a web request
     private static HttpServletRequest currentRequest() {
 
         RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
@@ -213,11 +202,7 @@ public class LogRegistryAspect {
                 : null;
     }
 
-    /**
-     * A refused request is not a broken system. Anything the method declared in
-     * warnOn is a business rejection and lands at WARN; everything else is a
-     * genuine fault and lands at ERROR.
-     */
+    // WARN for expected business errors, ERROR for everything else
     private static LogLevel failureLevel(LogRegistry annotation, Throwable failure) {
 
         for (Class<? extends Throwable> businessFailure : annotation.warnOn()) {
@@ -229,18 +214,14 @@ public class LogRegistryAspect {
         return LogLevel.ERROR;
     }
 
-    /**
-     * A controller returning ResponseEntity tells us the status directly. For
-     * anything else the true status is not settled until the response is
-     * written, well after this aspect returns - so rather than guess, we record
-     * nothing and let the request-level interceptor report the real one.
-     */
+    // HTTP status, only known when the method returns ResponseEntity
     private static Integer statusCodeOf(Object result) {
         return result instanceof ResponseEntity<?> response
                 ? response.getStatusCode().value()
                 : null;
     }
 
+    // method arguments as name -> value
     private Map<String, Object> argumentsOf(ProceedingJoinPoint joinPoint) {
 
         MethodSignature signature = (MethodSignature) joinPoint.getSignature();
@@ -257,14 +238,7 @@ public class LogRegistryAspect {
         return arguments;
     }
 
-    /**
-     * Converts a domain object into a map so the masker can see inside it.
-     *
-     * <p>This matters more than it looks. The masker works on keys, so a
-     * TransferRequest left as an object would be written via toString() with
-     * its OTP field intact. As a map, "otp" is a key the masker recognises and
-     * redacts.
-     */
+    // turns objects into maps so their fields can be masked
     private Object asLoggable(Object value) {
 
         if (value == null || isSimple(value)) {
@@ -272,14 +246,14 @@ public class LogRegistryAspect {
         }
 
         try {
+            // convert to a map so the masker can see field names like otp
             return objectMapper.convertValue(value, Map.class);
         } catch (Exception notConvertible) {
-            // Deliberately the class name and not toString(): an object we
-            // cannot inspect is an object we cannot mask.
             return value.getClass().getSimpleName();
         }
     }
 
+    // plain values that can be logged as they are
     private static boolean isSimple(Object value) {
         return value instanceof CharSequence
                 || value instanceof Number
@@ -287,6 +261,7 @@ public class LogRegistryAspect {
                 || value instanceof Enum<?>;
     }
 
+    // fallback when the value is empty
     private static String orDefault(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
     }

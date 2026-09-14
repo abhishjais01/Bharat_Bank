@@ -12,14 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
-/**
- * Read side of the audit trail, kept apart from {@link AuditService}.
- *
- * <p>Separating reads from the append path is not ceremony here: the append
- * path takes a write lock on the chain tip, and a read has no business anywhere
- * near that. It also leaves an obvious seam for giving queries their own
- * read-only datasource later.
- */
+// read-only queries on audit_logs
 @Service
 public class AuditQueryService {
 
@@ -29,11 +22,13 @@ public class AuditQueryService {
         this.repository = repository;
     }
 
+    // records for one trace, oldest first
     @Transactional(readOnly = true)
     public List<AuditLog> findByTraceId(String traceId) {
         return repository.findByTraceId(traceId, Sort.by(Sort.Direction.ASC, "createdAt", "id"));
     }
 
+    // filtered, paged search
     @Transactional(readOnly = true)
     public Page<AuditLog> search(AuditSearchCriteria criteria, Pageable pageable) {
         return repository.findAll(LogSpecifications.matching(criteria), pageable);

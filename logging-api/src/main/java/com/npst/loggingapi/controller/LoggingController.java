@@ -29,6 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Instant;
 import java.util.List;
 
+// REST endpoints for application logs
 @RestController
 @RequestMapping("/api/v1/logs")
 @Tag(name = "Application logs", description = "Ingest and search application logs")
@@ -40,13 +41,7 @@ public class LoggingController {
         this.service = service;
     }
 
-    /**
-     * Ingests one application log.
-     *
-     * <p>Returns 201 rather than the previous 202. The row is written inside
-     * this call, so "accepted for processing later" was a false promise - and a
-     * caller retrying on the strength of it would have duplicated the row.
-     */
+    // store one application log
     @PostMapping
     @Operation(summary = "Store one application log")
     public ResponseEntity<ApiResponse<LogIngestResponse>> ingest(
@@ -59,13 +54,7 @@ public class LoggingController {
                         new LogIngestResponse(logId)));
     }
 
-    /**
-     * The support path: paste a trace id, get the whole customer journey.
-     *
-     * <p>Returns a list, not a single record. One trace spans several services
-     * and many lines - collapsing that to one row would defeat the purpose of
-     * having a correlation id at all.
-     */
+    // all logs for one trace id
     @GetMapping("/{traceId}")
     @Operation(summary = "Every log line recorded under one trace id")
     public ResponseEntity<ApiResponse<List<ApplicationLogResponse>>> byTraceId(
@@ -81,10 +70,7 @@ public class LoggingController {
                 journey));
     }
 
-    /**
-     * Filtered search. Every parameter is optional and they combine freely;
-     * supplying none returns the most recent logs.
-     */
+    // search with optional filters, paged
     @GetMapping
     @Operation(summary = "Search application logs by service, level, customer or channel")
     public ResponseEntity<ApiResponse<PageResponse<ApplicationLogResponse>>> search(
@@ -110,11 +96,7 @@ public class LoggingController {
                 PageResponse.of(page, response -> response)));
     }
 
-    /**
-     * Prefers the trace id of the log being reported over this request's own,
-     * so a rejection can be correlated with the customer journey that produced
-     * it rather than with the logging call.
-     */
+    // trace id of the log itself, or this request's own
     private static String traceId(LogIngestRequest request) {
 
         if (request != null && request.getTraceId() != null && !request.getTraceId().isBlank()) {

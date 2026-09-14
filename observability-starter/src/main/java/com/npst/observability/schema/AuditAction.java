@@ -1,5 +1,6 @@
 package com.npst.observability.schema;
 
+// a few common audit actions (most code passes the action as a string)
 public enum AuditAction {
 
     LOGIN,

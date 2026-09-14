@@ -2,14 +2,7 @@ package com.npst.loggingapi.exception;
 
 import com.npst.observability.contract.EventType;
 
-/**
- * Raised when a producer sends an event type this layer does not persist.
- *
- * <p>Layer 1 stores application logs only. Audit events belong in the separate,
- * immutable {@code audit_logs} table and error events are not persisted at all,
- * so accepting either here would quietly put the wrong data in the wrong place.
- * Rejecting loudly is the point: a misconfigured service finds out immediately.
- */
+// thrown when a non-APPLICATION event is sent to /api/v1/logs
 public class UnsupportedEventTypeException extends RuntimeException {
 
     private final transient EventType eventType;

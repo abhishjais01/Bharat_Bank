@@ -12,26 +12,15 @@ import org.springframework.stereotype.Repository;
 import java.time.Instant;
 import java.util.List;
 
+// database access for application_logs
 @Repository
 public interface ApplicationLogRepository
         extends JpaRepository<ApplicationLog, Long>, JpaSpecificationExecutor<ApplicationLog> {
 
-    /**
-     * Every line of one customer journey.
-     *
-     * <p>Returns a list, not a single row: a trace spans several services and
-     * many lines, and the whole point of the trace id is to get all of them
-     * back together.
-     */
+    // all logs for a trace id
     List<ApplicationLog> findByTraceId(String traceId, Sort sort);
 
-    /**
-     * Deletes one batch of expired rows.
-     *
-     * <p>Native and batched deliberately. A single DELETE across millions of
-     * rows holds locks long enough to stall ingest, and this service must never
-     * be the reason something else is slow.
-     */
+    // delete one batch of old rows, used by the retention job
     @Modifying
     @Query(value = "DELETE FROM application_logs WHERE created_at < :cutoff LIMIT :batchSize",
             nativeQuery = true)

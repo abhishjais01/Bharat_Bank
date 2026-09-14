@@ -2,10 +2,7 @@ package com.npst.loggingapi.search;
 
 import java.time.Instant;
 
-/**
- * Filters for an audit search - shaped around the questions compliance asks
- * rather than the columns that happen to exist.
- */
+// filters accepted by the audit search
 public record AuditSearchCriteria(
         String actorId,
         String customerId,

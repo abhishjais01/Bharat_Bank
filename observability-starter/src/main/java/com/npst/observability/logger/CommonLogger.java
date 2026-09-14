@@ -5,24 +5,15 @@ import com.npst.observability.schema.AuditAction;
 
 import java.util.Map;
 
-/**
- * The single entry point a banking microservice uses to record what happened.
- *
- * <p>Callers supply a message and business metadata only. Correlation id, bank
- * code, environment, service name and timestamp are attached by the platform.
- */
+// main logging API, used by the aspect or directly by services
 public interface CommonLogger {
 
-    /** Records an application event at INFO. */
+    // application logs
     void logApplication(String message, Map<String, Object> metadata);
 
-    /**
-     * Records an application event at a chosen severity - a rejected transfer
-     * is a WARN, not an INFO, and support filters on exactly that.
-     */
     void logApplication(LogLevel level, String message, Map<String, Object> metadata);
 
-    /** Records who did what to which entity, using the standard action set. */
+    // audit records
     void audit(String actorId,
                String actorType,
                AuditAction action,
@@ -30,13 +21,6 @@ public interface CommonLogger {
                String entityId,
                String description);
 
-    /**
-     * Same, with a free-form action.
-     *
-     * <p>AuditAction cannot enumerate every action a bank performs - each new
-     * domain would need a new enum constant in this shared library. @LogRegistry
-     * declares its action as a string for exactly that reason.
-     */
     void audit(String actorId,
                String actorType,
                String action,
@@ -44,15 +28,8 @@ public interface CommonLogger {
                String entityId,
                String description);
 
-    /**
-     * Records a fully populated audit event.
-     *
-     * <p>The overloads above cover the simple "who did what" case. This one is
-     * for callers - the {@code @LogRegistry} aspect in particular - that also
-     * know the channel, the API call, the amount and the outcome.
-     */
     void audit(com.npst.observability.schema.AuditEvent event);
 
-    /** Records a failure together with its stack trace. */
+    // error with stack trace (log file only)
     void error(String message, Exception cause);
 }

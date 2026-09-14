@@ -51,9 +51,12 @@ SpringBoot_Service_Architecture_FINAL.md
 Bharat_Bank_PRD_2.docx
 ARCHITECTURE.md
 PROJECT_REVIEW.md
+LOGGING_PROJECT_LEARNING_GUIDE.md
+README.md
+RUN.md
 
 # Any office / diagram document dropped into the repo root
-*.docx
+*.docx 
 *.xlsx
 *.pptx
 *.excalidraw

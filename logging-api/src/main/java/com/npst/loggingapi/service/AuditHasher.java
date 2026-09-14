@@ -9,29 +9,19 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.StringJoiner;
 
-/**
- * Links each audit row to the one before it.
- *
- * <p>The triggers in V2 stop an UPDATE or DELETE. This handles the case they
- * cannot: somebody with enough privilege to drop the triggers, edit history and
- * put them back. Because every row commits to the hash of its predecessor,
- * altering or removing any row breaks the chain from that point on, and a
- * verification pass finds it.
- *
- * <p>Only fields that describe what happened go into the hash. created_at is
- * excluded deliberately - it is assigned by this service, not by the actor, and
- * including it would make a replayed verification depend on ingest timing.
- */
+// builds the SHA-256 hash that links each audit row to the previous one
 @Component
 public class AuditHasher {
 
     private static final String ALGORITHM = "SHA-256";
     private static final String FIELD_SEPARATOR = "|";
 
+    // hash = SHA-256(previous hash | important fields of this row)
     public String hash(String previousHash, AuditLog entry) {
 
         StringJoiner canonical = new StringJoiner(FIELD_SEPARATOR);
 
+        // previous hash first, GENESIS for the very first row
         canonical.add(previousHash == null ? "GENESIS" : previousHash);
         canonical.add(nullSafe(entry.getTraceId()));
         canonical.add(nullSafe(entry.getBankCode()));
@@ -51,21 +41,22 @@ public class AuditHasher {
         canonical.add(nullSafe(entry.getStatusCode()));
         canonical.add(nullSafe(entry.getEventTime()));
 
+        // hash the joined text
         return digest(canonical.toString());
     }
 
+    // SHA-256 as hex text
     private static String digest(String value) {
         try {
             MessageDigest digest = MessageDigest.getInstance(ALGORITHM);
             return HexFormat.of().formatHex(digest.digest(value.getBytes(StandardCharsets.UTF_8)));
 
         } catch (NoSuchAlgorithmException impossible) {
-            // SHA-256 is mandated by the JDK; if it is missing the platform is
-            // broken in ways this class cannot help with.
             throw new IllegalStateException("SHA-256 is unavailable", impossible);
         }
     }
 
+    // empty text for null
     private static String nullSafe(Object value) {
         return value == null ? "" : value.toString();
     }

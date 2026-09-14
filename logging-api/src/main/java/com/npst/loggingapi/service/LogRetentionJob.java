@@ -12,20 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.Instant;
 
-/**
- * Deletes application logs past their retention window.
- *
- * <p><b>It touches application_logs and nothing else.</b> That is the entire
- * reason this class names its table explicitly instead of taking it as a
- * parameter: audit_logs carries a retention obligation measured in years, and a
- * purge job that could be pointed at the wrong table is a purge job that
- * eventually will be. The database would refuse the DELETE anyway - the
- * append-only triggers see to that - but relying on the last line of defence
- * for a first-line mistake is not a design.
- *
- * <p>Off by default. A retention policy is a decision the bank makes, not a
- * default a library should apply to somebody's data.
- */
+// nightly job that deletes old application logs (never audit logs), off by default
 @Component
 @ConditionalOnProperty(prefix = "observability.retention", name = "enabled",
         havingValue = "true")
@@ -45,20 +32,15 @@ public class LogRetentionJob {
         this.batchSize = batchSize;
     }
 
-    /**
-     * Runs nightly, off-peak.
-     *
-     * <p>Deletes in batches rather than one enormous statement: a single DELETE
-     * spanning millions of rows holds locks long enough to stall ingest, and
-     * the whole point of this service is that it never becomes the reason
-     * something else is slow.
-     */
+    // runs on the configured schedule
     @Scheduled(cron = "${observability.retention.cron:0 30 2 * * *}")
     @Transactional
     public void purgeExpiredApplicationLogs() {
 
+        // anything older than this is deleted
         Instant cutoff = Instant.now().minus(retention);
 
+        // delete in batches so ingest isn't blocked by one huge delete
         int deleted = repository.deleteExpired(cutoff, batchSize);
         int total = deleted;
 

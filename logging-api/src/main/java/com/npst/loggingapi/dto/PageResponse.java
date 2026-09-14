@@ -5,14 +5,7 @@ import org.springframework.data.domain.Page;
 import java.util.List;
 import java.util.function.Function;
 
-/**
- * A stable page shape for the search APIs.
- *
- * <p>Spring's Page is deliberately not serialized directly - its JSON structure
- * is an implementation detail that has changed between Spring versions, and a
- * support tool or a NestJS client reading these endpoints should not break when
- * the framework is upgraded.
- */
+// simple page wrapper for search results
 public record PageResponse<T>(
         List<T> content,
         int page,

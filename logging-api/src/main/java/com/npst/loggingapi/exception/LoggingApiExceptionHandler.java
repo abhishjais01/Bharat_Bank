@@ -14,30 +14,13 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.List;
 import java.util.stream.Collectors;
 
-/**
- * Turns every failure mode of the ingest endpoint into the same envelope.
- *
- * <p>Without this, validation failures fell through to Spring's default
- * ProblemDetail body: no traceId, no field list, nothing a support engineer
- * could correlate. The starter's own GlobalExceptionHandler could not fill the
- * gap either - it lives in a package this service never scans, and it maps
- * everything to 500, which would have turned a caller's bad request into an
- * apparent server fault.
- *
- * <p>Status codes are chosen to tell a producer what to do:
- * <ul>
- *   <li>400 - the request is malformed. Retrying will not help.</li>
- *   <li>422 - well formed, but this layer does not persist that event type.
- *       A configuration problem in the producer, not a transport error.</li>
- *   <li>500 - ours. The producer may retry.</li>
- * </ul>
- */
+// turns errors into the standard ApiResponse with a clear status code
 @RestControllerAdvice
 public class LoggingApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingApiExceptionHandler.class);
 
-    /** Missing or blank required fields - the five the SDK must enrich. */
+    // 400: required fields missing
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException ex) {
 
@@ -52,7 +35,7 @@ public class LoggingApiExceptionHandler {
                 .body(ApiResponse.error("Log rejected: validation failed", traceId(), errors));
     }
 
-    /** Unparseable JSON, or a value outside an enum such as level=CRITICAL. */
+    // 400: body is not valid JSON or has a bad value
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnreadable(HttpMessageNotReadableException ex) {
 
@@ -63,6 +46,7 @@ public class LoggingApiExceptionHandler {
                         traceId(), List.of(rootCauseOf(ex))));
     }
 
+    // 422: wrong event type for this endpoint
     @ExceptionHandler(UnsupportedEventTypeException.class)
     public ResponseEntity<ApiResponse<Void>> handleUnsupportedEventType(
             UnsupportedEventTypeException ex) {
@@ -75,6 +59,7 @@ public class LoggingApiExceptionHandler {
                         traceId(), List.of(ex.getMessage())));
     }
 
+    // 500: anything unexpected, e.g. database down
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception ex) {
 
@@ -84,14 +69,12 @@ public class LoggingApiExceptionHandler {
                 .body(ApiResponse.error("Log ingest failed", traceId(), null));
     }
 
+    // trace id of this request
     private static String traceId() {
         return MDC.get("traceId");
     }
 
-    /**
-     * Jackson's message names the offending field and value, which is exactly
-     * what the producer needs. The wrapper's message is noise.
-     */
+    // first line of the real parsing error
     private static String rootCauseOf(Exception ex) {
 
         Throwable cause = ex.getCause() == null ? ex : ex.getCause();
@@ -101,8 +84,6 @@ public class LoggingApiExceptionHandler {
             return cause.getClass().getSimpleName();
         }
 
-        // Jackson appends the full class path and byte offset; the first line
-        // carries the actual problem.
         return message.lines().findFirst().orElse(message);
     }
 }

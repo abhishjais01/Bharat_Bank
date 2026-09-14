@@ -12,13 +12,7 @@ import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 import java.util.Map;
 
-/**
- * One stored application log line.
- *
- * <p>The schema is owned by Flyway ({@code V1__application_logs.sql}); this
- * class only maps onto it, and {@code ddl-auto: validate} makes the two
- * disagreeing a startup failure rather than a silent drift.
- */
+// JPA mapping for the application_logs table
 @Entity
 @Table(name = "application_logs")
 public class ApplicationLog {
@@ -39,11 +33,6 @@ public class ApplicationLog {
     @Column(name = "service", nullable = false, length = 64)
     private String service;
 
-    /**
-     * The two context fields support genuinely filters on. Device and IP are
-     * diagnostic detail and stay in metadata - this is the high-volume table
-     * and a column costs storage on every row.
-     */
     @Column(name = "customer_id", length = 64)
     private String customerId;
 
@@ -59,12 +48,6 @@ public class ApplicationLog {
     @Column(name = "message", nullable = false, columnDefinition = "TEXT")
     private String message;
 
-    /**
-     * Stored as a real MySQL JSON column rather than a serialized string, so
-     * metadata stays queryable. Hibernate handles the conversion, which also
-     * removes the mapper's manual writeValueAsString and its silent
-     * "{}"-on-failure fallback.
-     */
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "metadata")
     private Map<String, Object> metadata;
@@ -72,14 +55,13 @@ public class ApplicationLog {
     @Column(name = "schema_version", nullable = false, length = 8)
     private String schemaVersion;
 
-    /** When the event happened, in the emitting service. */
     @Column(name = "event_time", nullable = false)
     private Instant eventTime;
 
-    /** When it arrived here. Set by this service, never by the caller. */
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    // getters and setters
     public Long getId() {
         return id;
     }

@@ -8,11 +8,7 @@ import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * The hash chain is what makes the audit trail tamper-<em>evident</em> rather
- * than merely tamper-resistant. The triggers stop an UPDATE; this catches
- * somebody who dropped the triggers, edited history and put them back.
- */
+// checks the audit hash chain values
 class AuditHasherTest {
 
     private final AuditHasher hasher = new AuditHasher();
@@ -45,8 +41,6 @@ class AuditHasherTest {
 
     @Test
     void theSameRowUnderADifferentParentHashesDifferently() {
-        // This is what links the chain. Remove a row from the middle and every
-        // hash after it stops matching its recorded parent.
         AuditLog entry = transfer("TXN-001", "5000.00");
 
         assertThat(hasher.hash("a".repeat(64), entry))
@@ -55,8 +49,6 @@ class AuditHasherTest {
 
     @Test
     void theFirstRowHashesAgainstAGenesisMarker() {
-        // Null has to mean something specific, or two different "no parent"
-        // representations would produce two different valid-looking chains.
         assertThat(hasher.hash(null, transfer("TXN-001", "5000.00")))
                 .isEqualTo(hasher.hash(null, transfer("TXN-001", "5000.00")));
     }

@@ -23,11 +23,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/**
- * What {@code @LogRegistry} must guarantee before it goes near a payment path:
- * it records the right things, and it changes nothing about the method it
- * wraps.
- */
+// checks @LogRegistry logs and audits correctly without changing the method's result
 class LogRegistryAspectTest {
 
     private final RecordingLogSink sink = new RecordingLogSink();
@@ -89,11 +85,6 @@ class LogRegistryAspectTest {
         assertThat(service.transfer("TXN-003")).isEqualTo("processed TXN-003");
     }
 
-    /**
-     * The reason arguments are converted to a map before logging. Left as an
-     * object, a request would be written via toString() with its OTP intact -
-     * the masker only recognises keys.
-     */
     @Test
     void sensitiveArgumentFieldsAreMaskedNotPrinted() {
 
@@ -131,8 +122,6 @@ class LogRegistryAspectTest {
                 new ObjectMapper(), null, new RecordingLogSink(), null,
                 new ObservabilityProperties()));
 
-        // BankResolver and masker are null, so recording blows up internally.
-        // The transfer must still succeed.
         assertThat(fragile.transfer("TXN-005")).isEqualTo("processed TXN-005");
     }
 
@@ -148,12 +137,10 @@ class LogRegistryAspectTest {
 
         AuditIngestRequest audit = sink.lastAudit();
 
-        // constant, from the annotation
         assertThat(audit.getAction()).isEqualTo("FUND_TRANSFER");
         assertThat(audit.getModule()).isEqualTo("PAYMENTS");
         assertThat(audit.getEntity()).isEqualTo("TRANSFER");
 
-        // runtime, from the execution and the request context
         assertThat(audit.getActorId()).isEqualTo("CIF-99001");
         assertThat(audit.getActorType()).isEqualTo("CUSTOMER");
         assertThat(audit.getChannel()).isEqualTo("MOBILE");
@@ -163,9 +150,25 @@ class LogRegistryAspectTest {
     }
 
     @Test
+    void anAuditRecordMasksPrivateCustomerDetailsButKeepsTheActor() {
+
+        RequestContext.put(RequestContext.CUSTOMER_ID, "CIF-99001");
+
+        service.auditedBeneficiary();
+
+        AuditIngestRequest audit = sink.lastAudit();
+
+        assertThat(audit.getActorId()).isEqualTo("CIF-99001");
+        assertThat(audit.getCustomerId()).isEqualTo("CIF-99001");
+        assertThat(audit.getMobileNumber()).isEqualTo("98XXXX3210");
+        assertThat(audit.getBusinessContext()).containsEntry("beneficiaryAccount", "XXXXXXXX5599");
+        assertThat(audit.getAfterState())
+                .containsEntry("accountNumber", "XXXXXXXX5510")
+                .containsEntry("beneficiaryName", "RXXXXX AXXX");
+    }
+
+    @Test
     void anUnauditedActionProducesNoAuditRecord() {
-        // A balance enquiry is an application log, not something a regulator
-        // asks about. Auditing everything is how an audit trail becomes noise.
         service.transfer("TXN-101");
 
         assertThat(sink.audits).isEmpty();
@@ -180,8 +183,6 @@ class LogRegistryAspectTest {
         assertThat(sink.lastAudit().getActorId()).isEqualTo("SYSTEM");
         assertThat(sink.lastAudit().getActorType()).isEqualTo("SYSTEM");
     }
-
-    // ---------------------------------------------------------------- setup
 
     private LogIngestRequest last() {
         assertThat(sink.logs).isNotEmpty();
@@ -214,7 +215,6 @@ class LogRegistryAspectTest {
         return factory.getProxy();
     }
 
-    /** Stands in for a real banking service. */
     static class BankingService {
 
         @LogRegistry(action = "FUND_TRANSFER", module = "PAYMENTS", entity = "TRANSFER")
@@ -237,9 +237,19 @@ class LogRegistryAspectTest {
         public String addBeneficiary(BeneficiaryRequest request) {
             return "added";
         }
+
+        @LogRegistry(action = "ADD_BENEFICIARY", module = "PAYMENTS",
+                entity = "BENEFICIARY", audit = true)
+        public String auditedBeneficiary() {
+            com.npst.observability.context.AuditContext.mobileNumber("9876543210");
+            com.npst.observability.context.AuditContext.put("beneficiaryAccount", "918273645599");
+            com.npst.observability.context.AuditContext.afterState(Map.of(
+                    "beneficiaryName", "Rajesh Amin",
+                    "accountNumber", "918273645510"));
+            return "added";
+        }
     }
 
-    /** Deliberately holds an OTP, as the real US-09 request does. */
     record BeneficiaryRequest(String accountNumber, String otp) {
     }
 

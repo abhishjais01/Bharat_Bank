@@ -21,7 +21,6 @@
 
     <dependencies>
 
-        <!-- The wire contract shared with logging-api -->
         <dependency>
             <groupId>com.npst.observability</groupId>
             <artifactId>observability-contract</artifactId>
@@ -33,8 +32,6 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!-- Generates observability.* metadata so importing services get IDE
-             autocomplete and validation for the configuration tree. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
@@ -46,8 +43,6 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Drives @LogRegistry. Logging a banking operation should be a
-             declaration on the method, not five lines inside it. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-aop</artifactId>
@@ -70,9 +65,6 @@
             <version>8.1</version>
         </dependency>
 
-        <!-- Optional integrations. Present only so the starter can offer
-             trace propagation to services that already use these clients;
-             neither is pulled into a consumer that does not have them. -->
         <dependency>
             <groupId>org.springframework</groupId>
             <artifactId>spring-webflux</artifactId>

@@ -4,6 +4,10 @@
 > is, why it exists, how each piece works, what has been built so far, and what
 > is left. Written to be read top to bottom, with diagrams instead of walls of
 > text.
+>
+> **Source of truth:** the code. This document was corrected against the code on
+> 2026-09-13; if the two ever disagree again, trust the code. A beginner-oriented
+> walkthrough lives in `LOGGING_PROJECT_LEARNING_GUIDE.md`.
 
 ---
 
@@ -122,13 +126,13 @@ flowchart TB
 
     subgraph pipelines["Two independent paths out"]
         FILE["📄 rolling log file<br/>logs/{service}.log"]
-        HTTP["🌐 HTTP POST<br/>/api/v1/logs"]
+        HTTP["🌐 async HTTP POST<br/>/api/v1/logs · /api/v1/audit"]
     end
 
     PROMTAIL["Promtail<br/>tails the file"]
     LOKI["Loki :3100<br/>live log search"]
     API["<b>logging-api</b> :8090<br/>validate + store"]
-    MYSQL[("MySQL :3306<br/>application_logs")]
+    MYSQL[("MySQL :3306<br/>application_logs · audit_logs")]
     GRAFANA["Grafana :3000<br/>dashboards"]
     PROM["Prometheus :9090<br/>metrics"]
 
@@ -139,7 +143,7 @@ flowchart TB
     FILE --> PROMTAIL --> LOKI --> GRAFANA
     HTTP --> API --> MYSQL
     APP -. "/actuator/prometheus" .-> PROM --> GRAFANA
-    MYSQL -. "GET /api/v1/logs/{traceId}" .-> SUPPORT["👩‍💻 Production support"]
+    MYSQL -. "GET /api/v1/logs · /api/v1/audit" .-> SUPPORT["👩‍💻 Support / compliance"]
 
     style SDK fill:#2563eb,color:#fff
     style API fill:#7c3aed,color:#fff
@@ -169,7 +173,7 @@ flowchart LR
 |---|---|---|
 | Best at | scanning millions of lines fast | pinpointing one journey |
 | Used by | engineers during an incident | support desk, weeks later |
-| Retention | 30 days | 90 days |
+| Retention | 30 days | 90 days for `application_logs` once `LogRetentionJob` is enabled (off by default); `audit_logs` never purged |
 | If it dies | the other still works | the other still works |
 
 **They are deliberately independent.** Promtail reads a file on disk, so even if
@@ -229,7 +233,7 @@ Follow one line from a developer's keyboard to the database.
 sequenceDiagram
     autonumber
     participant Cust as 📱 Customer
-    participant Filter as TraceFilter
+    participant Filter as RequestContextFilter
     participant Ctrl as Controller
     participant Log as CommonLogger
     participant Mask as MetadataMasker
@@ -240,7 +244,7 @@ sequenceDiagram
 
     Cust->>Filter: GET /balance<br/>X-Trace-Id: abc-123
     Note over Filter: Reuses the incoming ID.<br/>Only invents one if absent.
-    Filter->>Filter: MDC.put("traceId", "abc-123")
+    Filter->>Filter: MDC ← traceId, channel,<br/>deviceId, customerId, ipAddress
     Filter->>Ctrl: continue
 
     Ctrl->>Log: logApplication("Balance fetched", metadata)
@@ -257,13 +261,13 @@ sequenceDiagram
     Ctrl-->>Cust: ₹82,450 (fast)
 
     Queue->>API: POST /api/v1/logs
-    API->>API: validate all 8 required fields
+    API->>API: validate all 9 required fields
     API->>DB: INSERT INTO application_logs
     DB-->>API: id = 42
     API-->>Queue: 201 Created
 ```
 
-**The critical moment is step 10.** The customer gets their balance *before*
+**The critical moment is step 9.** The customer gets their balance *before*
 anything touches the network or the database. Logging can be slow, or down, and
 the customer never knows.
 
@@ -279,7 +283,7 @@ flowchart TB
         MM["MetadataMasker<br/><i>hide secrets</i>"]
         CL["CommonLogger<br/><i>the entry point</i>"]
         SINK["LogSink chain"]
-        TF["TraceFilter<br/><i>correlation ID</i>"]
+        TF["RequestContextFilter<br/><i>correlation ID + caller context</i>"]
         PROP["Trace propagation<br/>RestTemplate · Feign · WebClient"]
     end
 
@@ -367,15 +371,27 @@ flowchart LR
     style Q fill:#059669,color:#fff
 ```
 
-- **`TraceFilter`** reads the incoming `X-Trace-Id` header and only invents one
-  if it is absent. Runs first in the filter chain, so nothing is ever logged
-  without it.
-- **Propagation out** is automatic for `RestTemplate`, **Feign** and
-  **WebClient** — so when the real services adopt OpenFeign, traces survive the
-  first hop with zero extra code.
-- It uses **MDC** (a per-thread map), and removes *only its own key* at the end.
+- **`RequestContextFilter`** (it replaced the earlier `TraceFilter`) reads the
+  incoming `X-Trace-Id` header and only invents a UUID if it is absent. Runs
+  first in the filter chain, so every log line in the request carries it.
+- **Propagation out** is automatic for `RestTemplate` *built through
+  `RestTemplateBuilder`*, **Feign** (when on the classpath) and **WebClient**
+  (attach the `observabilityWebClientTraceFilter` bean) — so when the real
+  services adopt OpenFeign, traces survive the first hop with zero extra code.
+  A plain `new RestTemplate()` gets nothing. Only `X-Trace-Id` is forwarded;
+  channel, device and customer headers are not.
+- It uses **MDC** (a per-thread map), and removes *only its own keys* at the end.
   The old code called `MDC.clear()`, which also wiped keys the host application
   had set for its own logging.
+
+**Known limits** (from the code):
+
+- MDC is thread-local. Anything logged outside a request — a `@Scheduled` job, a
+  message listener, work handed to another thread — has `traceId = null`, and
+  logging-api rejects it with 400 because `traceId` is required. Such code must
+  put its own id into MDC.
+- `TraceRestTemplateInterceptor` hardcodes `X-Trace-Id` / `traceId` and ignores
+  `observability.trace.*`; the Feign and WebClient versions honour it.
 
 ### 7.4 Masking — the OTP gate
 
@@ -410,6 +426,12 @@ Three details that matter:
 3. **Matching is exact**, on the key lower-cased with `_` and `-` removed. So
    `accountNumber`, `account_number` and `ACCOUNT-NUMBER` all match — but `pin`
    does *not* swallow `shipping`.
+4. **Only listed keys are caught.** An unlisted name leaks:
+   `TransferRequest.debitAccount` is written in full today, and so are names
+   (`beneficiaryName`). Masking also applies only to `metadata` — the `message`
+   string, plain SLF4J lines and request URIs (e.g.
+   `/api/v1/accounts/918273645510/balance` in `LoggingInterceptor` lines and in
+   `audit_logs.api_endpoint`) are not masked.
 
 ### 7.5 The sink chain — why logging can never hurt the bank
 
@@ -434,6 +456,10 @@ flowchart LR
 | **Every drop counted** | `observability_logs_dropped_total` climbing is the signal. Silent loss is still *visible* loss |
 | **Hard timeouts** | The original `RestTemplate` had **none** — a stalled `logging-api` would block bank request threads forever |
 | **Failures logged, not swallowed** | The original `catch (Exception ignored) {}` meant a rejected log looked identical to a delivered one |
+
+Two consequences worth knowing: there is **no retry** (a failed or rejected
+record is counted and gone from the MySQL path), and **audit records share this
+queue**, so an outage, an overflow or a crash can lose audit rows too.
 
 **Proven at runtime.** With `logging-api` completely killed:
 
@@ -512,7 +538,7 @@ intercepted. Annotate the method called from outside.
 | `channel` | `X-Channel` | MOBILE, WEB, BRANCH, ATM |
 | `deviceId` | `X-Device-Id` | |
 | `customerId` | `X-Customer-Id` | |
-| `ipAddress` | `X-Forwarded-For` | First entry - behind a balancer the socket address is the balancer |
+| `ipAddress` | `X-Forwarded-For`, then `X-Real-IP`, then the socket address | First entry of `X-Forwarded-For` - behind a balancer the socket address is the balancer |
 
 Because they live in MDC, **every** log line in the request carries them -
 including lines written by code that has never heard of this platform.
@@ -542,6 +568,12 @@ flowchart TB
 moved money cannot work with `XXXXXXXX5510`. The file copy is masked, because
 it is tailed straight into Loki, which has no access control of its own. The
 wire copy is taken *before* the masking runs.
+
+Because of that ordering, **everything** in the wire copy is unmasked — not only
+`customer_id` and `mobile_number`, but also `business_context`, `before_state`
+and `after_state`. A transfer's `beneficiaryAccount` and a new beneficiary's
+`accountNumber` are therefore stored in full in `audit_logs`. Whether that is the
+intended policy needs a decision; see `PROJECT_REVIEW.md` G21 and C9.
 
 ### Immutability - two layers in place, one still outstanding
 
@@ -576,13 +608,22 @@ altering or removing history is detectable even by someone who drops the
 triggers. The chain tip is read under a pessimistic write lock, which
 serialises audit inserts - the price of a chain that cannot fork.
 
+The hash covers the identifying fields: trace, bank, environment, service,
+actor, action, entity, entity id, customer, channel, IP, business ref, amount,
+currency, status code and event time. It does **not** cover `description`,
+`module`, `mobile_number`, `device_id`, `api_endpoint`, `response_message`,
+`duration_ms`, `business_context`, `before_state` or `after_state`. Nothing
+verifies the chain yet, and a future verifier will have to canonicalise values
+(the hash uses the event time at nanosecond precision and the amount as sent;
+the table stores `DATETIME(3)` and `DECIMAL(18,2)`).
+
 ---
 
 ## 9. Inside the Logging API
 
 ```mermaid
 flowchart TB
-    IN["POST /api/v1/logs"] --> V{"@Valid<br/>8 required fields"}
+    IN["POST /api/v1/logs"] --> V{"@Valid<br/>9 required fields"}
     V -->|missing/blank| E400["<b>400</b> Bad Request<br/>lists every missing field"]
     V -->|bad enum / bad JSON| E400B["<b>400</b> unreadable body"]
     V -->|ok| S{"eventType?"}
@@ -626,6 +667,24 @@ Every response uses the same envelope, including the trace ID:
 > enriching those three fields, so every log was rejected by a response that
 > named none of them. It is now a passing regression test.
 
+### All endpoints
+
+| Method + path | Purpose |
+|---|---|
+| `POST /api/v1/logs` | Store one application log (APPLICATION only; other event types → 422) |
+| `GET /api/v1/logs/{traceId}` | Every stored line of one journey, oldest first |
+| `GET /api/v1/logs?service=&level=&environment=&customerId=&channel=&from=&to=` | Filtered, paged search (max page size 200) |
+| `POST /api/v1/audit` | Append one audit record to the hash chain |
+| `GET /api/v1/audit/{traceId}` | Audit records of one journey |
+| `GET /api/v1/audit?actorId=&customerId=&action=&module=&entity=&entityId=&channel=&businessRef=&from=&to=` | Compliance search |
+
+None of them is authenticated.
+
+On a *rejected* ingest, the envelope's `traceId` is logging-api's own request
+trace, not the payload's: the SDK posts from a background thread whose MDC is
+empty, so no `X-Trace-Id` header is sent and logging-api mints a UUID. On
+success, `LoggingController` reports the payload's trace id.
+
 ---
 
 ## 10. The database
@@ -638,6 +697,8 @@ erDiagram
         varchar bank_code "NPST"
         varchar environment "DEV / UAT / PROD"
         varchar service "which microservice"
+        varchar customer_id "V3 - indexed"
+        varchar channel "V3 - indexed"
         varchar event_type "APPLICATION"
         varchar level "INFO / WARN / ERROR / DEBUG"
         text message
@@ -650,11 +711,27 @@ erDiagram
     audit_logs {
         bigint id PK
         varchar trace_id
+        varchar channel "V3"
+        varchar device_id "V3"
+        varchar ip_address "V3"
+        varchar customer_id "V3 - unmasked"
+        varchar mobile_number "V3 - unmasked"
         varchar actor_id "WHO acted"
         varchar actor_type
         varchar action "WHAT they did"
+        varchar module "V3"
         varchar entity
         varchar entity_id
+        text description
+        varchar api_endpoint "V3"
+        varchar api_method "V3"
+        smallint status_code "V3 - null on failure"
+        varchar response_message "V3"
+        int duration_ms "V3"
+        varchar business_ref "V3 - indexed"
+        decimal amount "V3"
+        char currency "V3"
+        json business_context "V3"
         json before_state "PRD Auditability NFR"
         json after_state
         datetime event_time
@@ -686,9 +763,11 @@ detectable even by someone who drops the triggers.
 Immutability by *convention* is not immutability. A trigger survives an
 application bug, a careless migration, and an operator at a MySQL prompt.
 
-> **Layer 1 writes nothing to `audit_logs`.** The table exists now so that
-> turning audit on later is a feature flag, not a schema migration against a
-> live log store.
+> **`audit_logs` is written today.** `@LogRegistry(audit = true)` sends an
+> `AuditIngestRequest` to `POST /api/v1/audit`, and `AuditService` appends it to
+> the hash chain. (The comment in `V2__audit_logs.sql` still says nothing
+> inserts here; it predates the audit path. It is left as is because an applied
+> migration must not be edited — Flyway checksums it.)
 
 ### Two timestamps, not one
 
@@ -698,9 +777,20 @@ trace readable when one service has drifted.
 
 ### Indexes
 
-Five, covering every access path: `trace_id`, `(service, created_at)`,
-`(level, created_at)`, `(bank_code, created_at)`, `created_at`. Without them
-every support lookup is a full scan of a table growing at request rate.
+On `application_logs`, seven: `trace_id`, `(service, created_at)`,
+`(level, created_at)`, `(bank_code, created_at)`, `created_at`, and from V3
+`(customer_id, created_at)` and `(channel, created_at)`. Without them every
+support lookup is a full scan of a table growing at request rate. `metadata`
+has no index, so JSON searches are full scans.
+
+`audit_logs` is indexed for compliance questions: `trace_id`,
+`(actor_id, created_at)`, `(entity, entity_id)`, `created_at`,
+`(customer_id, created_at)`, `(channel, created_at)`, `(module, action)`,
+`business_ref`.
+
+`application_logs` has no `device_id` or `ip_address` columns, and `LogMapper`
+does not copy them into `metadata`, so those two values survive only in the log
+file / Loki and in `audit_logs`.
 
 ### Flyway owns the schema
 
@@ -714,7 +804,8 @@ failure**, not a silent runtime surprise.
 ## 11. Configuration
 
 Everything lives under one `observability.*` prefix. A new microservice needs
-**three lines**:
+**four lines** — three for application logs, plus the audit endpoint if any
+method uses `audit = true` (without it, audit records are silently not sent):
 
 ```yaml
 observability:
@@ -723,6 +814,7 @@ observability:
     code: NPST
   sink:
     endpoint: http://logging-api:8090/api/v1/logs
+    audit-endpoint: http://logging-api:8090/api/v1/audit
 ```
 
 Note what is **absent**: `service`. It defaults to `spring.application.name`, so
@@ -745,6 +837,7 @@ observability:
   sink:
     enabled: true                  # false = file/Loki only, no HTTP
     endpoint: http://localhost:8090/api/v1/logs
+    audit-endpoint: http://localhost:8090/api/v1/audit
     connect-timeout: 500ms
     read-timeout: 1s
     async:
@@ -754,14 +847,25 @@ observability:
       shutdown-timeout: 5s
 
   trace:
-    header: X-Trace-Id
+    header: X-Trace-Id             # see §7.3 - several classes hardcode these
     mdc-key: traceId
+
+  context:
+    channel-header: X-Channel
+    device-header: X-Device-Id
+    customer-header: X-Customer-Id
+    ip-headers: [X-Forwarded-For, X-Real-IP]
 
   masking:
     enabled: true
     placeholder: "***REDACTED***"
+    # Setting either list REPLACES the default list - copy the defaults from
+    # ObservabilityProperties.Masking and add to them.
     redact-keys: [otp, mpin, tpin, pin, password, token, cvv, ...]
     mask-keys:   [accountNumber, cardNumber, pan, aadhaar, mobile, email, ...]
+
+  aop:
+    enabled: true                  # false disables @LogRegistry
 
   exception-handler:
     enabled: false                 # opt-in; off so the SDK never swallows
@@ -770,17 +874,17 @@ observability:
 
 </details>
 
-All identity values are environment-variable overridable
-(`OBSERVABILITY_BANK_CODE`, `OBSERVABILITY_ENVIRONMENT`,
-`OBSERVABILITY_LOGGING_ENDPOINT`), so the **same JAR** runs in every
-environment.
+All identity values are environment-variable overridable through the `${...}`
+placeholders in each service's `application.yml` (`OBSERVABILITY_BANK_CODE`,
+`OBSERVABILITY_ENVIRONMENT`, `OBSERVABILITY_LOGGING_ENDPOINT`,
+`OBSERVABILITY_AUDIT_ENDPOINT`), so the **same JAR** runs in every environment.
 
 ---
 
 ## 12. Plugging in a real microservice
 
-The promise: replacing `sample-bank-app` with a real service is a **dependency
-plus three YAML lines**.
+The promise: replacing `sample-bank-app` with a real service is a **dependency,
+a few YAML lines, a Logback include and annotations** — no logging code.
 
 ```mermaid
 flowchart LR
@@ -807,7 +911,7 @@ flowchart LR
 </dependency>
 ```
 
-**Step 2** — add the three YAML lines from §10.
+**Step 2** — add the YAML lines from §11.
 
 **Step 3** — inject and use it:
 
@@ -826,8 +930,27 @@ public class BalanceController {
 }
 ```
 
-There is **no step 4**. No trace ID plumbing, no bank code, no service name, no
-masking calls, no HTTP client. The service's package name is irrelevant.
+**Step 4** — include the shared Logback config, so the service writes
+`logs/{spring.application.name}.log` for Promtail:
+
+```xml
+<configuration><include resource="observability-logback.xml"/></configuration>
+```
+
+What you do **not** write: trace ID plumbing, bank code, service name, masking
+calls, an HTTP client. The service's package name is irrelevant. Most services
+use `@LogRegistry` (§7.6) rather than calling `CommonLogger` directly as above.
+
+What the starter does **not** do for you:
+
+- set a trace id for `@Scheduled` jobs or message listeners (§7.3);
+- know your DTOs' sensitive field names — add them to the mask lists (§7.4);
+- publish pipeline counters to Prometheus — add `micrometer-registry-prometheus`
+  and a scrape target in `prometheus.yml`;
+- log requests rejected by a security filter or by `@Valid` — both happen before
+  `@LogRegistry` runs.
+
+See `INTEGRATION.md` for the full adoption guide.
 
 ---
 
@@ -934,14 +1057,15 @@ pie showData
 - The exact JSON payload on the wire was captured and inspected.
 - With `logging-api` killed, the bank app answered in **5–8 ms**, failures
   counted.
-- Audit events reach the file but **not** the wire — Layer 1 scoping holds.
+- Audit events reach both the file (masked) and `POST /api/v1/audit` (unmasked),
+  and land hash-chained in `audit_logs`.
 
 ### Environment
 
 | | |
 |---|---|
 | Java | ✅ Temurin **21.0.12.1 LTS** |
-| Maven build | ✅ `BUILD SUCCESS`, 29 tests |
+| Maven build | ✅ `BUILD SUCCESS`, 43 tests |
 | Docker Desktop | ✅ installed (4.90.0), ❌ **engine not running** |
 | **Blocker** | **WSL2 is not installed** — Windows 11 Home has no Hyper-V, so WSL2 is the only backend. Fix: `wsl --install --no-distribution` as Administrator, then reboot |
 
@@ -1010,6 +1134,22 @@ Grouped by how much they would matter in production.
 | No index on `metadata` | Any JSON search is a full scan |
 | A leftover `IMMUTABILITY-TEST` row | Sits in `audit_logs`, undeletable by design |
 
+**Found in the code re-review (2026-09-13)** — details in `PROJECT_REVIEW.md` G20–G30
+
+| Gap | Consequence |
+|---|---|
+| `debitAccount` logged in full | Exact-key masking misses unlisted names; real log lines show the full debit account |
+| Account numbers in URIs | `LoggingInterceptor` lines and `audit_logs.api_endpoint` carry `/accounts/{accountNumber}/...` unmasked |
+| Audit JSON maps unmasked | `business_context`, `before_state`, `after_state` go to `audit_logs` in full (§8) |
+| No trace id outside requests | Scheduled jobs and listeners send `traceId: null` → 400 → lost from MySQL |
+| Audit shares the lossy queue | Overflow, outage or crash loses audit records, not just application logs |
+| Invalid requests leave no structured record | `@Valid` failures happen before the aspect: no application log, no audit |
+| `device_id` / `ip_address` dropped | Sent on the wire, not stored in `application_logs` |
+| Hash omits state fields | Editing `before_state` / `after_state` / `business_context` would not break the chain |
+| RestTemplate interceptor ignores config | Changing `observability.trace.*` breaks RestTemplate propagation |
+| YAML mask lists replace defaults | A short override silently removes default keys |
+| NestJS producer sketch masked no account/card numbers | It compared camelCase list entries with normalised keys (fixed in `INTEGRATION.md`) |
+
 ---
 
 ### Decisions made without being specified
@@ -1064,12 +1204,19 @@ on the host, this has to be run once as root.
 mvn clean install
 ```
 
-### Start infrastructure
+### Start everything — pick one route
+
+**Docker Compose** (whole stack, including both applications; written but not
+yet run):
 
 ```bash
 cd infrastructure
-docker compose up -d
+docker compose up -d --build
 ```
+
+**Or locally** (verified): a host MySQL, then the two jars below, started from
+the repository root. Don't mix the routes — both want ports 3306, 8080 and
+8090. `RUN.md` has the full steps.
 
 | Service | URL |
 |---|---|
@@ -1078,7 +1225,7 @@ docker compose up -d
 | Loki | http://localhost:3100 |
 | MySQL | `localhost:3306` — db `observability`, user `npst` |
 
-### Start the services
+### Start the services (local route)
 
 ```bash
 java -jar logging-api/target/logging-api-1.0.0-SNAPSHOT.jar        # :8090
@@ -1088,7 +1235,8 @@ java -jar sample-bank-app/target/sample-bank-app-1.0.0-SNAPSHOT.jar # :8080
 ### Generate a log
 
 ```bash
-curl -H "X-Trace-Id: MY-TEST-001" http://localhost:8080/api/v1/hello
+curl -H "X-Trace-Id: MY-TEST-001" -H "X-Customer-Id: CIF-99001" \
+  http://localhost:8080/api/v1/accounts/918273645510/balance
 ```
 
 ### See it in all three places
@@ -1202,6 +1350,7 @@ curl -s localhost:8080/actuator/prometheus | grep observability_logs
 
 ---
 
-*Layer 1 complete. Last updated at the end of Step 8.*
+*Layer 1 complete. Last updated at the end of Step 8; corrected against the code
+on 2026-09-13.*
 
 *See `INTEGRATION.md` for adopting the platform in a Spring Boot or NestJS service.*

@@ -30,14 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Instant;
 import java.util.List;
 
-/**
- * The audit trail: who did what, to which record, from where.
- *
- * <p>A separate endpoint from application logs rather than a flag on the same
- * one. The two have different shapes, different readers, different retention -
- * years against days - and different access control, since audit records carry
- * unmasked identity. Sharing a route would have meant sharing all of that.
- */
+// REST endpoints for audit records
 @RestController
 @RequestMapping("/api/v1/audit")
 @Tag(name = "Audit trail", description = "Append and search the immutable audit trail")
@@ -51,10 +44,7 @@ public class AuditController {
         this.queryService = queryService;
     }
 
-    /**
-     * Appends one audit record. There is deliberately no update and no delete -
-     * the table rejects both at the database level.
-     */
+    // store one audit record
     @PostMapping
     @Operation(summary = "Append one audit record to the chain")
     public ResponseEntity<ApiResponse<LogIngestResponse>> append(
@@ -67,6 +57,7 @@ public class AuditController {
                         new LogIngestResponse(auditId)));
     }
 
+    // all audit records for one trace id
     @GetMapping("/{traceId}")
     @Operation(summary = "Every audit record written under one trace id")
     public ResponseEntity<ApiResponse<List<AuditLogResponse>>> byTraceId(
@@ -82,11 +73,7 @@ public class AuditController {
                 records));
     }
 
-    /**
-     * Filtered search, shaped around the questions compliance asks: what did
-     * this customer do, who performed this action, what happened to this
-     * entity, which transfers carry this reference.
-     */
+    // search with optional filters, paged
     @GetMapping
     @Operation(summary = "Search the audit trail by actor, customer, action, module or entity")
     public ResponseEntity<ApiResponse<PageResponse<AuditLogResponse>>> search(

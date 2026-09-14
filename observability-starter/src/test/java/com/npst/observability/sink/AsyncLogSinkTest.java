@@ -13,11 +13,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * The safety properties that let this platform run in front of a bank:
- * logging never blocks a customer request, never throws at the caller, and
- * never grows without bound when logging-api is down.
- */
+// checks the background queue never blocks or breaks the caller
 class AsyncLogSinkTest {
 
     @Test
@@ -47,7 +43,6 @@ class AsyncLogSinkTest {
     @Test
     void aSlowDownstreamDoesNotSlowTheCaller() throws Exception {
 
-        // Downstream takes 200ms per log - roughly a struggling logging-api.
         LogSink slow = RecordingLogSink.behaving(request -> {
             try {
                 Thread.sleep(200);
@@ -78,7 +73,6 @@ class AsyncLogSinkTest {
     @Test
     void dropsOldestRatherThanGrowingWithoutBound() throws Exception {
 
-        // Downstream that never completes, so the queue fills and stays full.
         CountDownLatch blocked = new CountDownLatch(1);
 
         LogSink stuck = RecordingLogSink.behaving(request -> {
@@ -118,7 +112,6 @@ class AsyncLogSinkTest {
         AsyncLogSink sink = new AsyncLogSink(exploding, asyncConfig(10),
                 new SimpleMeterRegistry());
 
-        // The banking service keeps working regardless.
         sink.send(request("balance enquiry"));
 
         Thread.sleep(300);

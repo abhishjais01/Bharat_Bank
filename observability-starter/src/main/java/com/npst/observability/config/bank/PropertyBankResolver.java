@@ -3,13 +3,7 @@ package com.npst.observability.config.bank;
 import com.npst.observability.config.ObservabilityProperties;
 import org.springframework.core.env.Environment;
 
-/**
- * Default {@link BankResolver}: reads identity from {@code observability.*}
- * configuration, which is the right model for one deployment per bank.
- *
- * <p>The service name falls back to {@code spring.application.name}, so a new
- * microservice importing the starter does not have to name itself twice.
- */
+// default resolver: reads the values from observability.* config
 public class PropertyBankResolver implements BankResolver {
 
     private static final String UNKNOWN_SERVICE = "unknown-service";
@@ -43,6 +37,7 @@ public class PropertyBankResolver implements BankResolver {
         return properties.getEnvironment();
     }
 
+    // service name from config, or spring.application.name
     @Override
     public String getServiceName() {
 

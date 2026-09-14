@@ -23,11 +23,6 @@ logging:
   level:
     root: INFO
 
-# ---------------------------------------------------------------------------
-# Everything the observability platform needs from a banking microservice.
-# Note what is NOT here: observability.service. It defaults to
-# spring.application.name, so a new service names itself once.
-# ---------------------------------------------------------------------------
 observability:
 
   environment: ${OBSERVABILITY_ENVIRONMENT:DEV}
@@ -41,28 +36,17 @@ observability:
     endpoint: ${OBSERVABILITY_LOGGING_ENDPOINT:http://localhost:8090/api/v1/logs}
     audit-endpoint: ${OBSERVABILITY_AUDIT_ENDPOINT:http://localhost:8090/api/v1/audit}
 
-# ---------------------------------------------------------------------------
-# Mock banking behaviour. None of this is part of the observability platform;
-# it exists so the platform can be exercised against realistic journeys.
-# ---------------------------------------------------------------------------
 mock:
 
   cbs:
-    # Points at the stub CBS inside this application. Swap for the team's
-    # Swagger mock CBS, and later the real one, without touching any code -
-    # CbsClient is an interface and this is its only address.
     base-url: ${MOCK_CBS_BASE_URL:http://localhost:8080/mock-cbs}
     timeout: 3s
 
   statement:
-    # US-08: the date range picker enforces a sensible maximum.
     max-days: 365
 
   transfer:
-    # US-10: per-transaction limit, above which a transfer is refused.
     limit: 200000.00
 
   beneficiary:
-    # US-09: cooling-off before a new beneficiary can receive a first transfer,
-    # configurable per the bank risk policy.
     cooling-off: PT30M

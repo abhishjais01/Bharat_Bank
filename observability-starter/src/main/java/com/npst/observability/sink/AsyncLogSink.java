@@ -18,36 +18,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * Takes the log off the caller's thread.
- *
- * <p>This is the single most important safety property in the platform. A
- * balance enquiry made by a customer must not wait on an HTTP round trip to
- * logging-api, and must not fail if that service is down. Before this class
- * existed the send happened inline, so every logged line added network latency
- * to a customer-facing request.
- *
- * <p>The queue is bounded and the overflow policy is drop-oldest. Both are
- * deliberate:
- * <ul>
- *   <li>Unbounded would convert a logging-api outage into an
- *       OutOfMemoryError in the banking service - the observability platform
- *       taking down the thing it observes.</li>
- *   <li>Blocking on a full queue would reintroduce exactly the latency this
- *       class exists to remove.</li>
- *   <li>Dropping the <em>oldest</em> keeps the newest lines, which are the
- *       ones an engineer is looking at during an incident.</li>
- * </ul>
- * Every drop increments a counter, so silent loss is still visible loss.
- */
+// sends records from a background thread so requests never wait on logging-api
 public class AsyncLogSink implements LogSink, DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(AsyncLogSink.class);
 
     private final LogSink delegate;
     private final ObservabilityProperties.Async config;
-    // Holds both payload kinds; the worker dispatches on type. One queue
-    // rather than two keeps the bound on total memory honest.
     private final BlockingQueue<Object> queue;
     private final ExecutorService workers;
     private final AtomicBoolean running = new AtomicBoolean(true);
@@ -55,6 +32,7 @@ public class AsyncLogSink implements LogSink, DisposableBean {
     private final Counter submitted;
     private final Counter dropped;
 
+    // create the bounded queue and start the worker threads
     public AsyncLogSink(LogSink delegate,
                         ObservabilityProperties.Async config,
                         MeterRegistry meterRegistry) {
@@ -75,6 +53,7 @@ public class AsyncLogSink implements LogSink, DisposableBean {
         }
     }
 
+    // logs and audit records go into the same queue
     @Override
     public void send(LogIngestRequest request) {
         enqueue(request);
@@ -85,6 +64,7 @@ public class AsyncLogSink implements LogSink, DisposableBean {
         enqueue(request);
     }
 
+    // add to the queue without blocking
     private void enqueue(Object request) {
 
         SinkMetrics.increment(submitted);
@@ -93,21 +73,21 @@ public class AsyncLogSink implements LogSink, DisposableBean {
             return;
         }
 
+        // normal case: there is room
         if (queue.offer(request)) {
             return;
         }
 
-        // Full. Make room by discarding the oldest, then take the slot.
+        // queue is full: drop the oldest entry instead of blocking the request thread
         queue.poll();
         SinkMetrics.increment(dropped);
 
         if (!queue.offer(request)) {
-            // Another worker raced us for the slot. Drop this one rather than
-            // retry - the caller is a customer request and owes us nothing.
             SinkMetrics.increment(dropped);
         }
     }
 
+    // worker loop: take items from the queue and send them
     private void drain() {
 
         while (running.get() || !queue.isEmpty()) {
@@ -127,17 +107,12 @@ public class AsyncLogSink implements LogSink, DisposableBean {
                 return;
 
             } catch (Exception ex) {
-                // The delegate already handles its own failures; this is the
-                // last line of defence so one bad log cannot kill the worker.
                 log.warn("Log sink worker recovered from an error : {}", ex.getMessage());
             }
         }
     }
 
-    /**
-     * Gives in-flight logs a chance to reach logging-api on shutdown, rather
-     * than losing whatever was queued when the pod was told to stop.
-     */
+    // on shutdown, give the queue a few seconds to empty
     @Override
     public void destroy() throws InterruptedException {
 
@@ -154,11 +129,12 @@ public class AsyncLogSink implements LogSink, DisposableBean {
         }
     }
 
-    /** Visible for tests. */
+    // current queue size, used in tests
     public int queued() {
         return queue.size();
     }
 
+    // named daemon threads for the workers
     private static ThreadFactory threadFactory() {
 
         AtomicInteger counter = new AtomicInteger();
@@ -166,7 +142,6 @@ public class AsyncLogSink implements LogSink, DisposableBean {
         return runnable -> {
             Thread thread = new Thread(runnable,
                     "observability-log-sink-" + counter.incrementAndGet());
-            // Daemon: a stuck log worker must never hold up JVM shutdown.
             thread.setDaemon(true);
             return thread;
         };

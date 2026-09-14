@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+// writes simple request start and end lines with status and time (log file only)
 public class LoggingInterceptor implements HandlerInterceptor {
 
     private static final Logger log =
@@ -13,6 +14,7 @@ public class LoggingInterceptor implements HandlerInterceptor {
 
     private static final String START_TIME = "startTime";
 
+    // before the controller: remember the start time
     @Override
     public boolean preHandle(HttpServletRequest request,
                              HttpServletResponse response,
@@ -28,6 +30,7 @@ public class LoggingInterceptor implements HandlerInterceptor {
         return true;
     }
 
+    // after the response: log the status and duration
     @Override
     public void afterCompletion(HttpServletRequest request,
                                 HttpServletResponse response,

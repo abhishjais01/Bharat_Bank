@@ -14,15 +14,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Talks to the CBS over HTTP.
- *
- * <p>Built through {@link RestTemplateBuilder} on purpose. The observability
- * starter contributes a {@code RestTemplateCustomizer}, so every template built
- * this way carries the correlation id outbound automatically - this class
- * contains no tracing code and needs none. That is the behaviour a real service
- * inherits for free.
- */
+// CBS client over HTTP (points at the mock CBS in this app)
 @Component
 public class HttpCbsClient implements CbsClient {
 
@@ -34,12 +26,14 @@ public class HttpCbsClient implements CbsClient {
                          @Value("${mock.cbs.timeout:3s}") Duration timeout) {
 
         this.baseUrl = baseUrl;
+        // built from RestTemplateBuilder so the trace id header is added automatically
         this.restTemplate = builder
                 .connectTimeout(timeout)
                 .readTimeout(timeout)
                 .build();
     }
 
+    // GET the account balance
     @Override
     public BigDecimal fetchBalance(String accountNumber, String simulate) {
 
@@ -49,12 +43,14 @@ public class HttpCbsClient implements CbsClient {
         return new BigDecimal(String.valueOf(response.get("balance")));
     }
 
+    // GET the customer's accounts
     @Override
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> fetchAccounts(String customerId, String simulate) {
         return get(uri("/customers/{customer}/accounts", simulate, customerId), List.class);
     }
 
+    // GET transactions for a date range
     @Override
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> fetchTransactions(String accountNumber,
@@ -73,6 +69,7 @@ public class HttpCbsClient implements CbsClient {
         return get(uri, List.class);
     }
 
+    // POST a debit and return the CBS reference
     @Override
     public String debit(String accountNumber, BigDecimal amount, String simulate) {
 
@@ -94,6 +91,7 @@ public class HttpCbsClient implements CbsClient {
         }
     }
 
+    // GET with the same error handling
     private <T> T get(String uri, Class<T> type) {
         try {
             return restTemplate.getForObject(uri, type);
@@ -106,11 +104,7 @@ public class HttpCbsClient implements CbsClient {
         }
     }
 
-    /**
-     * A CBS outage and a business rejection reach us the same way - as a status
-     * code - but they are very different events, and the logging platform has
-     * to record them at different levels.
-     */
+    // 402 means insufficient funds, anything else is a CBS failure
     private static RuntimeException translate(HttpStatusCode status, Exception cause) {
 
         if (status.value() == 402) {
@@ -121,6 +115,7 @@ public class HttpCbsClient implements CbsClient {
         return new CbsUnavailableException("CBS returned " + status.value(), cause);
     }
 
+    // build the CBS URL
     private String uri(String path, String simulate, Object... variables) {
         return UriComponentsBuilder.fromUriString(baseUrl)
                 .path(path)

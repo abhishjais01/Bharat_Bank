@@ -6,12 +6,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Map;
 
-/**
- * One audit record, as compliance sees it.
- *
- * <p>Includes prevHash and rowHash on purpose: an auditor should be able to
- * walk the chain from the API alone, without database access.
- */
+// audit record as returned by the search API, including the hashes
 public record AuditLogResponse(
         Long id,
         String traceId,

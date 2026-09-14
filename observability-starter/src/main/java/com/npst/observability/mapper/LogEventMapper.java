@@ -3,15 +3,7 @@ package com.npst.observability.mapper;
 import com.npst.observability.contract.LogIngestRequest;
 import com.npst.observability.schema.LogEvent;
 
-/**
- * Converts the SDK's internal event model into the wire contract.
- *
- * <p>Keeping these apart is deliberate. The file/Loki log carries the richer
- * internal shape (audit actor, stack trace, endpoint); the HTTP payload
- * carries only what logging-api has agreed to accept. Previously the internal
- * object was serialized straight onto the wire, which is how the
- * {@code serviceName} / {@code service} mismatch went unnoticed.
- */
+// converts the internal log event into the JSON sent to logging-api
 public final class LogEventMapper {
 
     private LogEventMapper() {

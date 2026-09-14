@@ -8,25 +8,13 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Map;
 
-/**
- * The payload POSTed to {@code /api/v1/audit}.
- *
- * <p>Separate from {@link LogIngestRequest} on purpose. An audit record answers
- * "who did what", is read by compliance rather than support, is retained for
- * years rather than days, and - unlike an application log - keeps identity
- * fields unmasked. Sharing one shape with application logs would have meant one
- * set of rules for two very different obligations.
- *
- * <p><b>This carries unmasked PII.</b> customerId and mobileNumber are the real
- * values, because a regulator asking who moved money cannot work with
- * {@code XXXXXXXX5510}. The same event written to the log file is masked; only
- * what travels to the audit table keeps identity intact.
- */
+// JSON body sent to POST /api/v1/audit, one audit record
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class AuditIngestRequest {
 
     public static final String CURRENT_SCHEMA_VERSION = "1.0";
 
+    // fields every audit record must have
     @NotBlank(message = "schemaVersion is required")
     private String schemaVersion = CURRENT_SCHEMA_VERSION;
 
@@ -42,20 +30,16 @@ public class AuditIngestRequest {
     @NotBlank(message = "service is required")
     private String service;
 
-    // --- who -----------------------------------------------------------------
-
     @NotBlank(message = "actorId is required")
     private String actorId;
 
     @NotBlank(message = "actorType is required")
     private String actorType;
 
-    // --- what ----------------------------------------------------------------
-
     @NotBlank(message = "action is required")
     private String action;
 
-    /** Banking domain, from {@code @LogRegistry(module = ...)}. */
+    // optional details about the action
     private String module;
 
     @NotBlank(message = "entity is required")
@@ -65,22 +49,18 @@ public class AuditIngestRequest {
 
     private String description;
 
-    // --- where the request came from -----------------------------------------
-
+    // where the request came from
     private String channel;
 
     private String deviceId;
 
     private String ipAddress;
 
-    /** Unmasked. See the class comment. */
     private String customerId;
 
-    /** Unmasked. See the class comment. */
     private String mobileNumber;
 
-    // --- the API call --------------------------------------------------------
-
+    // the API call and its result
     private String apiEndpoint;
 
     private String apiMethod;
@@ -91,31 +71,28 @@ public class AuditIngestRequest {
 
     private Long durationMs;
 
-    // --- business fields -----------------------------------------------------
-
-    /** Transaction or request reference the business would quote. */
+    // business details of the transaction
     private String businessRef;
 
     private BigDecimal amount;
 
-    /** ISO 4217, e.g. INR. */
     private String currency;
 
-    /** Domain extras with no column of their own. */
     private Map<String, Object> businessContext;
 
-    // --- state transition, per the PRD's Auditability NFR ---------------------
-
+    // record state before and after the change
     private Map<String, Object> beforeState;
 
     private Map<String, Object> afterState;
 
+    // when the action happened
     @NotNull(message = "timestamp is required")
     private Instant timestamp;
 
     public AuditIngestRequest() {
     }
 
+    // getters and setters
     public String getSchemaVersion() {
         return schemaVersion;
     }

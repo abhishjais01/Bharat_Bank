@@ -9,11 +9,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * The PRD's Security NFR forbids OTPs, tokens and biometric data in plaintext
- * logs. Metadata is a free-form map, so nothing but this class stands between
- * a developer and an OTP on disk. These are the tests that hold that line.
- */
+// checks sensitive values are masked or hidden
 class MetadataMaskerTest {
 
     private final MetadataMasker masker =
@@ -47,6 +43,19 @@ class MetadataMaskerTest {
     }
 
     @Test
+    void masksCustomerNamesAndOtherAccountFields() {
+
+        Map<String, Object> masked = masker.mask(Map.of(
+                "beneficiaryName", "Rajesh Amin",
+                "debitAccount", "918273645510",
+                "billerName", "MSEB"));
+
+        assertThat(masked.get("beneficiaryName")).isEqualTo("RXXXXX AXXX");
+        assertThat(masked.get("debitAccount")).isEqualTo("XXXXXXXX5510");
+        assertThat(masked.get("billerName")).isEqualTo("MSEB");
+    }
+
+    @Test
     void keyMatchingIgnoresCaseAndSeparators() {
 
         Map<String, Object> masked = masker.mask(Map.of(
@@ -61,7 +70,6 @@ class MetadataMaskerTest {
 
     @Test
     void doesNotMatchOnSubstrings() {
-        // "pin" must not swallow "shipping" - the reason matching is exact.
         Map<String, Object> masked = masker.mask(Map.of("shippingAddress", "MG Road"));
 
         assertThat(masked.get("shippingAddress")).isEqualTo("MG Road");
@@ -89,7 +97,6 @@ class MetadataMaskerTest {
 
     @Test
     void leavesTheCallersMapUntouched() {
-        // A logging call must never mutate the business object it was handed.
         Map<String, Object> original = new LinkedHashMap<>();
         original.put("otp", "483920");
 

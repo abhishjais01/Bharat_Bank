@@ -11,21 +11,7 @@ import java.util.Set;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
-/**
- * Scrubs sensitive banking data out of log metadata before it leaves the JVM.
- *
- * <p>This runs at the source rather than in a central processor. The
- * architecture note argues for masking centrally, and for an ELK pipeline that
- * is right - but there is no processing stage between Promtail and Loki, so an
- * OTP that reaches {@code application.log} is already on disk unmasked. Source
- * masking is the only control that exists today; a central rule set can be
- * layered on later without removing this one.
- *
- * <p>Matching is exact on the normalised key - lower-cased with {@code _} and
- * {@code -} stripped, so {@code accountNumber}, {@code account_number} and
- * {@code ACCOUNT-NUMBER} all match. Substring matching was rejected: "pin"
- * would have swallowed "shipping".
- */
+// hides sensitive values in maps, based on the key name
 public class MetadataMasker {
 
     private final ObservabilityProperties.Masking config;
@@ -38,10 +24,7 @@ public class MetadataMasker {
         this.maskKeys = normalise(config.getMaskKeys());
     }
 
-    /**
-     * Returns a masked copy. The caller's map is never modified - a logging
-     * call must not mutate the business object it was handed.
-     */
+    // returns a masked copy; the original map is not changed
     public Map<String, Object> mask(Map<String, Object> metadata) {
 
         if (metadata == null || metadata.isEmpty() || !config.isEnabled()) {
@@ -55,28 +38,27 @@ public class MetadataMasker {
         return masked;
     }
 
+    // decide what to do with one key and value
     private Object maskValue(String key, Object value) {
 
+        // exact match on the normalised key (lower case, without _ and -)
         String normalised = normalise(key);
 
+        // secrets are replaced completely
         if (redactKeys.contains(normalised)) {
-            // Redact regardless of type. A null here would look like "absent"
-            // rather than "withheld", which reads as a bug during an incident.
             return config.getPlaceholder();
         }
 
+        // identifiers keep only a few characters
         if (maskKeys.contains(normalised) && value != null) {
             return ruleFor(normalised).apply(String.valueOf(value));
         }
 
+        // otherwise look inside nested maps and lists
         return maskNested(key, value);
     }
 
-    /**
-     * Metadata is often a nested structure - a transfer's beneficiary block,
-     * a list of accounts. Masking only the top level would leak everything one
-     * level down.
-     */
+    // masks values inside nested maps and lists
     @SuppressWarnings("unchecked")
     private Object maskNested(String key, Object value) {
 
@@ -96,6 +78,7 @@ public class MetadataMasker {
         return value;
     }
 
+    // pick the masking style for a key
     private static UnaryOperator<String> ruleFor(String normalisedKey) {
         return switch (normalisedKey) {
             case "mobile", "mobilenumber", "phone", "phonenumber" -> MaskingUtil::maskMobile;
@@ -103,10 +86,13 @@ public class MetadataMasker {
             case "aadhaar", "aadhar" -> MaskingUtil::maskAadhaar;
             case "email", "emailid" -> MaskingUtil::maskEmail;
             case "cardnumber", "cardno", "card" -> MaskingUtil::maskCardNumber;
+            case "name", "fullname", "firstname", "lastname", "customername",
+                 "beneficiaryname", "accountholdername", "nomineename" -> MaskingUtil::maskName;
             default -> MaskingUtil::maskAccountNumber;
         };
     }
 
+    // key helpers: lower case, no _ or -
     private static Set<String> normalise(List<String> keys) {
         return keys.stream().map(MetadataMasker::normalise).collect(Collectors.toSet());
     }

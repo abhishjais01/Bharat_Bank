@@ -15,19 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-/**
- * A stand-in Core Banking System.
- *
- * <p>Lives inside this application but is reached over real HTTP, which is the
- * whole reason it exists here rather than as an in-memory stub: a correlation
- * id that never crosses a network boundary has not actually been proven to
- * propagate. The inbound request context filter sees the forwarded
- * {@code X-Trace-Id} and reuses it, so a balance enquiry and the CBS call it
- * makes share one trace.
- *
- * <p>When the team's Swagger mock CBS is ready this class is deleted and
- * {@code mock.cbs.base-url} points at it instead.
- */
+// fake core banking system for local testing; ?simulate=... forces failures
 @RestController
 @RequestMapping("/mock-cbs")
 public class MockCbsController {
@@ -35,6 +23,7 @@ public class MockCbsController {
     private static final String ACCOUNT_WITH_FUNDS = "918273645510";
     private static final BigDecimal BALANCE = new BigDecimal("82450.00");
 
+    // balance
     @GetMapping("/accounts/{accountNumber}/balance")
     public ResponseEntity<Map<String, Object>> balance(
             @PathVariable String accountNumber,
@@ -52,7 +41,7 @@ public class MockCbsController {
                 "currency", "INR"));
     }
 
-    /** US-07: every account type the customer holds. */
+    // customer accounts
     @GetMapping("/customers/{customerId}/accounts")
     public ResponseEntity<List<Map<String, Object>>> accounts(
             @PathVariable String customerId,
@@ -73,10 +62,7 @@ public class MockCbsController {
                         "balance", new BigDecimal("-1875000.00"), "currency", "INR")));
     }
 
-    /**
-     * US-08. A period with no activity returns an empty list, not an error -
-     * the PRD is explicit that a zero-transaction statement is a valid result.
-     */
+    // transactions
     @GetMapping("/accounts/{accountNumber}/transactions")
     public ResponseEntity<List<Map<String, Object>>> transactions(
             @PathVariable String accountNumber,
@@ -98,7 +84,7 @@ public class MockCbsController {
                 Map.of("date", to, "description", "IMPS/RENT", "debit", new BigDecimal("28000.00"))));
     }
 
-    /** The only call that moves money. */
+    // debit
     @PostMapping("/transfers")
     public ResponseEntity<Map<String, Object>> debit(@RequestBody Map<String, Object> request,
                                                      @RequestParam(required = false) String simulate) {
@@ -119,6 +105,7 @@ public class MockCbsController {
                 "amount", request.getOrDefault("amount", "0")));
     }
 
+    // CBS_DOWN returns 503, SLOW adds a delay
     private static ResponseEntity<Map<String, Object>> simulatedFailure(String simulate) {
 
         if (isDown(simulate)) {
@@ -133,11 +120,12 @@ public class MockCbsController {
         return null;
     }
 
+    // true when CBS_DOWN is requested
     private static boolean isDown(String simulate) {
         return "CBS_DOWN".equals(simulate);
     }
 
-    /** Long enough to be visible in durationMs, short enough not to time out. */
+    // short delay to simulate a slow CBS
     private static void sleep() {
         try {
             Thread.sleep(700);

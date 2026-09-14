@@ -4,15 +4,11 @@ global:
 
 scrape_configs:
 
-  # The banking service. observability_logs_* here is the pipeline's own
-  # health: submitted, sent, failed, dropped.
   - job_name: sample-bank-app
     metrics_path: /actuator/prometheus
     static_configs:
       - targets: ["sample-bank-app:8080"]
 
-  # The central log service. Previously unscraped, which meant an outage in
-  # the thing that stores every log was itself invisible.
   - job_name: logging-api
     metrics_path: /actuator/prometheus
     static_configs:

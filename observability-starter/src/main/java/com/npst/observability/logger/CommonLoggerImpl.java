@@ -24,22 +24,7 @@ import java.io.StringWriter;
 import java.time.Instant;
 import java.util.Map;
 
-/**
- * Default {@link CommonLogger}.
- *
- * <p>The enrichment is the point: a developer in a banking service writes a
- * message and some business metadata, and traceId, bankCode, environment,
- * service and timestamp are attached here. No controller should ever pass its
- * own bankCode or service name.
- *
- * <p>Masking happens before the line is written anywhere, not just before it
- * is sent. The file is tailed straight into Loki, so an unmasked OTP written
- * to disk has already leaked.
- *
- * <p>Not a {@code @Component} - it is contributed by
- * {@code ObservabilityAutoConfiguration}, so it is found regardless of the
- * host application's base package.
- */
+// default logger: masks, adds context, writes to the log file and sends to logging-api
 public class CommonLoggerImpl implements CommonLogger {
 
     private static final Logger log = LoggerFactory.getLogger(CommonLoggerImpl.class);
@@ -62,11 +47,13 @@ public class CommonLoggerImpl implements CommonLogger {
         this.properties = properties;
     }
 
+    // shortcut for an INFO log
     @Override
     public void logApplication(String message, Map<String, Object> metadata) {
         logApplication(LogLevel.INFO, message, metadata);
     }
 
+    // application log: build, mask, enrich, write, send
     @Override
     public void logApplication(LogLevel level, String message, Map<String, Object> metadata) {
 
@@ -76,19 +63,25 @@ public class CommonLoggerImpl implements CommonLogger {
             event.setEventType(EventType.APPLICATION);
             event.setLevel(level);
             event.setMessage(message);
+            // mask before writing anywhere, the log file is shipped to Loki as it is
             event.setMetadata(masker.mask(metadata));
 
+            // add trace id, bank, service and caller details
             enrich(event);
 
+            // write to the log file
             write(level, event);
 
+            // queue for logging-api
             sink.send(LogEventMapper.toIngestRequest(event));
 
         } catch (Exception ex) {
+            // never let logging break the request
             log.error("Application logging failed : message={}", message, ex);
         }
     }
 
+    // audit with an enum action
     @Override
     public void audit(String actorId,
                       String actorType,
@@ -101,6 +94,7 @@ public class CommonLoggerImpl implements CommonLogger {
                 entity, entityId, description);
     }
 
+    // simple audit record from basic fields
     @Override
     public void audit(String actorId,
                       String actorType,
@@ -121,48 +115,49 @@ public class CommonLoggerImpl implements CommonLogger {
         audit(event);
     }
 
+    // full audit path: enrich, mask, send to logging-api, write to the log file
     @Override
     public void audit(AuditEvent event) {
 
         try {
+            // audit records are always INFO
             event.setLevel(LogLevel.INFO);
 
             if (event.getMessage() == null) {
                 event.setMessage(event.getDescription());
             }
 
+            // add trace id, bank, service and caller details
             enrich(event);
 
-            // Order matters. The wire copy is taken first and carries identity
-            // intact - the audit table is a compliance record, and a regulator
-            // asking who moved money cannot work with XXXXXXXX5510.
+            // mask customer details before the record leaves the service, so the audit
+            // table and the log file both get the same masked values
+            maskPrivateDetails(event);
+
+            // queue for logging-api
             sink.sendAudit(AuditEventMapper.toIngestRequest(event));
 
-            // The file copy is then masked. It is tailed straight into Loki,
-            // which has no access control of its own, so unmasked identity must
-            // not reach it. Same event, two audiences, two rules.
-            maskForFile(event);
-
+            // same record to the log file
             write(LogLevel.INFO, event);
 
         } catch (Exception ex) {
+            // never let audit logging break the request
             log.error("Audit logging failed : action={}", event.getAction(), ex);
         }
     }
 
-    /**
-     * Scrubs the copy that goes to disk. The mapper has already taken an
-     * unmasked snapshot for the audit table, so mutating the event here is safe.
-     */
-    private void maskForFile(AuditEvent event) {
+    // hide mobile, account numbers, names and numbers in the URL
+    private void maskPrivateDetails(AuditEvent event) {
 
         event.setMobileNumber(MaskingUtil.maskMobile(event.getMobileNumber()));
+        event.setApiEndpoint(MaskingUtil.maskIdentifiersInPath(event.getApiEndpoint()));
         event.setMetadata(masker.mask(event.getMetadata()));
         event.setBusinessContext(masker.mask(event.getBusinessContext()));
         event.setBeforeState(masker.mask(event.getBeforeState()));
         event.setAfterState(masker.mask(event.getAfterState()));
     }
 
+    // error record with stack trace, written to the log file only
     @Override
     public void error(String message, Exception cause) {
 
@@ -177,15 +172,12 @@ public class CommonLoggerImpl implements CommonLogger {
 
             log.error(toJson(event), cause);
 
-            // Error persistence is Layer 1's explicit non-goal; the stack
-            // trace still reaches the file and Loki.
-
         } catch (Exception ex) {
             log.error("Error logging failed : message={}", message, ex);
         }
     }
 
-    /** Stamps platform identity onto an event. The whole point of the SDK. */
+    // fills the fields every record needs
     private void enrich(LogEvent event) {
 
         event.setTraceId(MDC.get(properties.getTrace().getMdcKey()));
@@ -193,8 +185,7 @@ public class CommonLoggerImpl implements CommonLogger {
         event.setEnvironment(bankResolver.getEnvironment());
         event.setService(bankResolver.getServiceName());
 
-        // Captured once per request at the edge, so every log carries it -
-        // including logs written by code that knows nothing about this SDK.
+        // caller details captured by the filter
         event.setChannel(RequestContext.channel());
         event.setDeviceId(RequestContext.deviceId());
         event.setIpAddress(RequestContext.ipAddress());
@@ -205,6 +196,7 @@ public class CommonLoggerImpl implements CommonLogger {
         }
     }
 
+    // write the JSON at the right log level
     private void write(LogLevel level, LogEvent event) {
 
         String json = toJson(event);
@@ -217,6 +209,7 @@ public class CommonLoggerImpl implements CommonLogger {
         }
     }
 
+    // event to JSON text
     private String toJson(LogEvent event) {
         try {
             return mapper.writeValueAsString(event);
@@ -225,6 +218,7 @@ public class CommonLoggerImpl implements CommonLogger {
         }
     }
 
+    // stack trace as text
     private static String stackTraceOf(Exception cause) {
 
         if (cause == null) {

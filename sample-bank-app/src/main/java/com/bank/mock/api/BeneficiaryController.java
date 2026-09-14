@@ -18,14 +18,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
-/**
- * Beneficiary management from the PRD, US-09.
- *
- * <p>This is the platform's masking gate. The request carries an OTP and a full
- * account number, {@code logArguments} is on, and the requirement is that
- * neither value appears in the log file, in Loki, or in MySQL. If masking ever
- * regresses, this endpoint is where it shows.
- */
+// beneficiary endpoints
 @RestController
 @RequestMapping("/api/v1/beneficiaries")
 public class BeneficiaryController {
@@ -37,20 +30,17 @@ public class BeneficiaryController {
         this.coolingOff = coolingOff;
     }
 
-    /**
-     * Adding a beneficiary is audited: it changes who the customer can send
-     * money to, which is exactly the kind of change a regulator asks about.
-     */
+    // add a beneficiary; logged and audited
     @PostMapping
     @LogRegistry(action = "ADD_BENEFICIARY", module = "PAYMENTS", entity = "BENEFICIARY",
             audit = true, logArguments = true)
     public ResponseEntity<BeneficiaryResponse> add(@Valid @RequestBody BeneficiaryRequest request) {
 
+        // new id for the beneficiary
         String beneficiaryId = "BEN" + UUID.randomUUID().toString()
                 .substring(0, 8).toUpperCase();
 
-        // What only this method knows. The mobile number is stored unmasked in
-        // the audit table and masked in the log file - two audiences, two rules.
+        // details for the audit record (masked before storing)
         AuditContext.entityId(beneficiaryId);
         AuditContext.businessRef(beneficiaryId);
         AuditContext.mobileNumber(request.mobile());
@@ -60,6 +50,7 @@ public class BeneficiaryController {
                 "accountNumber", request.accountNumber(),
                 "status", "PENDING_ACTIVATION"));
 
+        // the response shows only the masked account number
         return ResponseEntity.status(HttpStatus.CREATED).body(new BeneficiaryResponse(
                 beneficiaryId,
                 request.name(),

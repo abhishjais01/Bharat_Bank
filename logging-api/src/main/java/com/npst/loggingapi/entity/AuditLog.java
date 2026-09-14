@@ -14,23 +14,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.Map;
 
-/**
- * One audit record: who did what, to which entity, from where.
- *
- * <p>{@code @Immutable} tells Hibernate never to issue an UPDATE for this
- * entity. It pairs with the database trigger from V2, which rejects UPDATE and
- * DELETE outright - an audit trail protected only by application convention is
- * not protected.
- *
- * <p>A third layer belongs here and is not yet applied: the application user
- * should hold INSERT and SELECT on this table and nothing more. Today it holds
- * ALL PRIVILEGES, so the trigger is the only thing standing between a stray
- * DELETE and the audit history. See ARCHITECTURE.md, section 8.
- *
- * <p>Identity fields here are <b>unmasked</b> by policy. A regulator asking who
- * moved money cannot work with a masked value. The copy written to the log file
- * is masked instead.
- */
+// JPA mapping for audit_logs; @Immutable so Hibernate never updates a row
 @Entity
 @Immutable
 @Table(name = "audit_logs")
@@ -52,8 +36,7 @@ public class AuditLog {
     @Column(name = "service", nullable = false, length = 64)
     private String service;
 
-    // --- where the request came from -----------------------------------------
-
+    // where the request came from
     @Column(name = "channel", length = 16)
     private String channel;
 
@@ -69,16 +52,14 @@ public class AuditLog {
     @Column(name = "mobile_number", length = 20)
     private String mobileNumber;
 
-    // --- who -----------------------------------------------------------------
-
+    // who did it
     @Column(name = "actor_id", nullable = false, length = 64)
     private String actorId;
 
     @Column(name = "actor_type", nullable = false, length = 32)
     private String actorType;
 
-    // --- what ----------------------------------------------------------------
-
+    // what was done and to which record
     @Column(name = "action", nullable = false, length = 64)
     private String action;
 
@@ -94,20 +75,13 @@ public class AuditLog {
     @Column(name = "description", columnDefinition = "TEXT")
     private String description;
 
-    // --- the API call --------------------------------------------------------
-
+    // API call and result
     @Column(name = "api_endpoint", length = 255)
     private String apiEndpoint;
 
     @Column(name = "api_method", length = 8)
     private String apiMethod;
 
-    /**
-     * SMALLINT in the schema - an HTTP status is three digits and never needs
-     * four bytes. Integer in Java because that is what the contract carries and
-     * what callers expect; the columnDefinition reconciles the two for
-     * ddl-auto: validate.
-     */
     @Column(name = "status_code", columnDefinition = "smallint")
     private Integer statusCode;
 
@@ -117,20 +91,13 @@ public class AuditLog {
     @Column(name = "duration_ms")
     private Integer durationMs;
 
-    // --- business fields -----------------------------------------------------
-
+    // business details
     @Column(name = "business_ref", length = 64)
     private String businessRef;
 
     @Column(name = "amount", precision = 18, scale = 2)
     private BigDecimal amount;
 
-    /**
-     * CHAR, not VARCHAR. An ISO 4217 code is always exactly three characters,
-     * so the fixed width is both correct and marginally cheaper - but Hibernate
-     * maps String to VARCHAR unless told otherwise, and ddl-auto: validate
-     * refuses to start on the mismatch.
-     */
     @Column(name = "currency", length = 3, columnDefinition = "char(3)")
     private String currency;
 
@@ -138,8 +105,7 @@ public class AuditLog {
     @Column(name = "business_context")
     private Map<String, Object> businessContext;
 
-    // --- state transition ----------------------------------------------------
-
+    // state before and after the change
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "before_state")
     private Map<String, Object> beforeState;
@@ -148,24 +114,21 @@ public class AuditLog {
     @Column(name = "after_state")
     private Map<String, Object> afterState;
 
+    // when it happened and when it was stored
     @Column(name = "event_time", nullable = false)
     private Instant eventTime;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
-    // --- tamper evidence -----------------------------------------------------
-
-    /**
-     * CHAR(64) like the migration: a SHA-256 hex digest is always exactly 64
-     * characters. Null only on the first row of the chain.
-     */
+    // hash chain: previous row hash and this row hash
     @Column(name = "prev_hash", length = 64, columnDefinition = "char(64)")
     private String prevHash;
 
     @Column(name = "row_hash", nullable = false, length = 64, columnDefinition = "char(64)")
     private String rowHash;
 
+    // getters and setters
     public Long getId() {
         return id;
     }

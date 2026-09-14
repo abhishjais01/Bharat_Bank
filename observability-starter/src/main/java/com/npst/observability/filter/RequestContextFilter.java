@@ -12,20 +12,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.UUID;
 
-/**
- * Establishes everything we know about the caller, once, at the edge.
- *
- * <p>Replaces the earlier TraceFilter, which handled only the correlation id.
- * The audit trail has to record where a request came from - channel, device, IP,
- * customer - and capturing that per call site would be both repetitive and
- * unreliable. Capturing it here means every log line in the request, including
- * ones written by code that has never heard of this platform, carries it.
- *
- * <p>The correlation id is <em>honoured</em> rather than generated: the gateway
- * mints it and it travels down the call chain, which is what allows one customer
- * journey to be reconstructed across several microservices. A fresh id is
- * created only when none arrives.
- */
+// first filter on every request: puts the trace id and caller headers into MDC
 public class RequestContextFilter extends OncePerRequestFilter {
 
     private final ObservabilityProperties properties;
@@ -34,47 +21,47 @@ public class RequestContextFilter extends OncePerRequestFilter {
         this.properties = properties;
     }
 
+    // set up the context, run the request, then clean up
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
                                     FilterChain filterChain)
             throws ServletException, IOException {
 
+        // header names from config
         String traceHeader = properties.getTrace().getHeader();
         String mdcKey = properties.getTrace().getMdcKey();
         ObservabilityProperties.Context context = properties.getContext();
 
         String traceId = request.getHeader(traceHeader);
 
+        // reuse the caller's trace id, create one only when it's missing
         if (traceId == null || traceId.isBlank()) {
             traceId = UUID.randomUUID().toString();
         }
 
+        // make the trace id available to logs, the interceptor and the caller
         MDC.put(mdcKey, traceId);
         request.setAttribute(mdcKey, traceId);
         response.setHeader(traceHeader, traceId);
 
-        // All optional. An internal call or a scheduled job simply carries fewer.
+        // optional caller details
         RequestContext.put(RequestContext.CHANNEL, request.getHeader(context.getChannelHeader()));
         RequestContext.put(RequestContext.DEVICE_ID, request.getHeader(context.getDeviceHeader()));
         RequestContext.put(RequestContext.CUSTOMER_ID, request.getHeader(context.getCustomerHeader()));
         RequestContext.put(RequestContext.IP_ADDRESS, clientIpOf(request, context));
 
+        // continue with the rest of the request
         try {
             filterChain.doFilter(request, response);
         } finally {
-            // Only this platform's keys - the host application's own MDC
-            // entries are none of our business.
+            // remove only our own keys, the app may have its own MDC entries
             RequestContext.clear();
             MDC.remove(mdcKey);
         }
     }
 
-    /**
-     * Behind a load balancer the socket address is the balancer, so a forwarded
-     * header wins when present. X-Forwarded-For is a comma separated chain and
-     * the first entry is the original client.
-     */
+    // real client IP: forwarded header first, then the socket address
     private static String clientIpOf(HttpServletRequest request,
                                      ObservabilityProperties.Context context) {
 

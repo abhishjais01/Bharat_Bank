@@ -1,6 +1,6 @@
 package com.bank.mock.exception;
 
-/** US-08: the requested statement range is wider than policy allows. */
+// statement date range is too long
 public class InvalidStatementPeriodException extends RuntimeException {
 
     public InvalidStatementPeriodException(String message) {

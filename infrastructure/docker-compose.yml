@@ -1,15 +1,6 @@
-# The whole platform, from nothing to a working dashboard:
-#
-#     docker compose up -d --build
-#
-# Run from this directory. The build context is the repository root, because
-# the application images build the multi-module project from source.
-
 name: bank-observability
 
 services:
-
-  # --------------------------------------------------------------- storage --
 
   mysql:
     image: mysql:8.4
@@ -21,8 +12,7 @@ services:
       MYSQL_USER: ${MYSQL_USER:-npst}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-npst123}
 
-    # V2 creates the append-only audit triggers, and MySQL 8 refuses
-    # CREATE TRIGGER from a non-SUPER user while binary logging is on.
+    # needed so Flyway can create the audit_logs triggers
     command: --log-bin-trust-function-creators=1
 
     ports:
@@ -41,8 +31,6 @@ services:
 
     restart: unless-stopped
 
-  # ------------------------------------------------------------ log search --
-
   loki:
     image: grafana/loki:3.1.1
     container_name: loki
@@ -54,8 +42,6 @@ services:
 
     volumes:
       - ./loki-config.yml:/etc/loki/loki-config.yml:ro
-      # Without this the chunks, WAL and index live in the container's writable
-      # layer and every log is lost on recreate.
       - loki_data:/loki
 
     restart: unless-stopped
@@ -69,16 +55,12 @@ services:
     volumes:
       - app_logs:/var/log/bank:ro
       - ./promtail-config.yml:/etc/promtail/promtail-config.yml:ro
-      # Keeps read positions across restarts, so a restart does not re-ship
-      # every line already in Loki.
       - promtail_positions:/tmp
 
     depends_on:
       - loki
 
     restart: unless-stopped
-
-  # -------------------------------------------------------------- metrics --
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -106,9 +88,6 @@ services:
       - "3000:3000"
 
     volumes:
-      # Datasources and dashboards are provisioned from the repository, so a
-      # fresh stack comes up already wired - no clicking through the UI, and
-      # nothing lost when the container is recreated.
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
       - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
       - grafana_data:/var/lib/grafana
@@ -118,8 +97,6 @@ services:
       - prometheus
 
     restart: unless-stopped
-
-  # ---------------------------------------------------------- the platform --
 
   logging-api:
     build:
@@ -144,8 +121,6 @@ services:
 
     depends_on:
       mysql:
-        # Not just "started" - Flyway needs a database that is actually
-        # accepting connections, and MySQL takes ~30s on first boot.
         condition: service_healthy
 
     restart: unless-stopped
@@ -181,6 +156,4 @@ volumes:
   prometheus_data:
   grafana_data:
   promtail_positions:
-  # Shared between the applications and Promtail. Each service writes
-  # {spring.application.name}.log, so two JVMs never share a file handle.
   app_logs:

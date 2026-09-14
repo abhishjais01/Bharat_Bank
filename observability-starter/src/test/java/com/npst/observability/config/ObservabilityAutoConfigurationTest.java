@@ -22,11 +22,7 @@ import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Covers the two promises the auto-configuration makes to an importing
- * service: it can be switched off entirely, and any single bean can be
- * replaced without forking the starter.
- */
+// checks which beans the starter creates and that they can be replaced
 class ObservabilityAutoConfigurationTest {
 
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
@@ -45,11 +41,6 @@ class ObservabilityAutoConfigurationTest {
 
     @Test
     void logsAreDispatchedAsynchronouslyByDefault() {
-        // Regression guard. Exposing HttpLogSink as its own bean made
-        // @ConditionalOnMissingBean(LogSink.class) match it, so the async
-        // wrapper was silently skipped and every log shipped inline on the
-        // caller's thread - the exact latency risk the async sink exists to
-        // remove. The build stayed green; only a runtime check caught it.
         runner.run(context -> assertThat(context.getBean(LogSink.class))
                 .isInstanceOf(AsyncLogSink.class));
     }
@@ -73,9 +64,6 @@ class ObservabilityAutoConfigurationTest {
 
     @Test
     void timestampIsSerializedAsIso8601NotAnEpochNumber() throws Exception {
-        // logging-api parses this field as an Instant. A mapper without
-        // JavaTimeModule would emit 1757342309.815 and every log would be
-        // rejected at the boundary.
         LogEvent event = new LogEvent();
         event.setTimestamp(Instant.parse("2026-09-08T14:38:29Z"));
         event.setLevel(LogLevel.INFO);

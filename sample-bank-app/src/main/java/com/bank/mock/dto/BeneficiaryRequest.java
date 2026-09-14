@@ -2,13 +2,7 @@ package com.bank.mock.dto;
 
 import jakarta.validation.constraints.NotBlank;
 
-/**
- * US-09: adding a beneficiary requires OTP confirmation.
- *
- * <p>The OTP field is the point of this endpoint as far as the observability
- * platform is concerned. It must never reach the log file, Loki or MySQL, and
- * the masker is what stops it.
- */
+// request to add a beneficiary (includes an OTP)
 public record BeneficiaryRequest(
         @NotBlank String name,
         @NotBlank String accountNumber,

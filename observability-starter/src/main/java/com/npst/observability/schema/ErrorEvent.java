@@ -3,6 +3,7 @@ package com.npst.observability.schema;
 import com.npst.observability.contract.EventType;
 import com.npst.observability.contract.LogLevel;
 
+// internal error record with exception details
 public class ErrorEvent extends LogEvent {
 
     private String exception;
@@ -13,7 +14,6 @@ public class ErrorEvent extends LogEvent {
         setLevel(LogLevel.ERROR);
     }
 
-    // Getters & Setters
     public String getException() {
         return exception;
     }

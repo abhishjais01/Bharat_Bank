@@ -9,18 +9,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Builds the WHERE clause from whichever filters were supplied.
- *
- * <p>Specifications rather than a pile of derived query methods: the filters
- * combine freely, and {@code findByServiceAndLevelAndCustomerIdAndChannelAnd...}
- * does not scale past about three.
- */
+// builds the SQL WHERE clause from whichever filters were given
 public final class LogSpecifications {
 
     private LogSpecifications() {
     }
 
+    // filters for application logs
     public static Specification<ApplicationLog> matching(LogSearchCriteria criteria) {
 
         return (root, query, builder) -> {
@@ -39,6 +34,7 @@ public final class LogSpecifications {
         };
     }
 
+    // filters for audit records
     public static Specification<AuditLog> matching(AuditSearchCriteria criteria) {
 
         return (root, query, builder) -> {
@@ -60,6 +56,7 @@ public final class LogSpecifications {
         };
     }
 
+    // add "column = value" only when a value was given
     private static void equalIfPresent(List<Predicate> predicates,
                                        jakarta.persistence.criteria.CriteriaBuilder builder,
                                        jakarta.persistence.criteria.Path<?> path,
@@ -70,6 +67,7 @@ public final class LogSpecifications {
         }
     }
 
+    // optional from / to time range
     private static void addWindow(List<Predicate> predicates,
                                   jakarta.persistence.criteria.CriteriaBuilder builder,
                                   jakarta.persistence.criteria.Path<Instant> path,
@@ -85,7 +83,7 @@ public final class LogSpecifications {
         }
     }
 
-    /** Levels, channels, actions and modules are stored upper case. */
+    // some columns are stored in upper case
     private static String upper(String value) {
         return value == null ? null : value.toUpperCase();
     }

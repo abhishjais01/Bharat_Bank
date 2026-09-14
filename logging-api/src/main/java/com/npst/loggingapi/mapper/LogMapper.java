@@ -6,13 +6,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 
-/**
- * Wire contract to stored row.
- *
- * <p>Note the two timestamps. {@code event_time} is the producer's, carried on
- * the request; {@code created_at} is stamped here on arrival. Keeping both is
- * what makes a trace readable when one service's clock has drifted.
- */
+// converts an incoming application log into a database row
 @Component
 public class LogMapper {
 
@@ -31,6 +25,7 @@ public class LogMapper {
         entity.setMessage(request.getMessage());
         entity.setMetadata(request.getMetadata());
         entity.setSchemaVersion(request.getSchemaVersion());
+        // event time from the caller, stored time from this service
         entity.setEventTime(request.getTimestamp());
         entity.setCreatedAt(Instant.now());
 

@@ -18,12 +18,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/**
- * Milestone 2: the ingest contract, end to end through the web layer.
- *
- * <p>No database here on purpose - this is about what a producer sees when it
- * gets the request right, and what it sees when it gets it wrong.
- */
+// checks the responses of the log ingest endpoint
 @WebMvcTest(LoggingController.class)
 class LoggingControllerTest {
 
@@ -48,11 +43,6 @@ class LoggingControllerTest {
                 .andExpect(jsonPath("$.timestamp").exists());
     }
 
-    /**
-     * The failure the project started with: the SDK was not enriching
-     * bankCode, environment or service, so every log was rejected - with a
-     * response that named none of them.
-     */
     @Test
     void namesEveryMissingFieldRatherThanFailingOpaquely() throws Exception {
 
@@ -91,8 +81,6 @@ class LoggingControllerTest {
     @Test
     void rejectsALevelOutsideTheContract() throws Exception {
 
-        // CRITICAL is not a LogLevel. Jackson fails before validation runs, so
-        // this takes the unreadable-body path rather than the field path.
         mockMvc.perform(post("/api/v1/logs")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(validRequest().replace("\"INFO\"", "\"CRITICAL\"")))
@@ -112,11 +100,6 @@ class LoggingControllerTest {
                 .andExpect(jsonPath("$.status").value("ERROR"));
     }
 
-    /**
-     * Layer 1 stores application logs only. An audit event is well formed but
-     * belongs in the separate immutable table, so it is refused rather than
-     * quietly written to the wrong place.
-     */
     @Test
     void refusesAnAuditEventWithUnprocessableEntity() throws Exception {
 
@@ -145,8 +128,6 @@ class LoggingControllerTest {
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.status").value("ERROR"))
                 .andExpect(jsonPath("$.message").value("Log ingest failed"))
-                // The producer must not be handed a stack trace or a raw
-                // database message.
                 .andExpect(jsonPath("$.errors").doesNotExist());
     }
 

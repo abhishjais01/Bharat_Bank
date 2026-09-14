@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
+// stores and searches application logs
 @Service
 public class LoggingService {
 
@@ -27,32 +28,28 @@ public class LoggingService {
         this.mapper = mapper;
     }
 
+    // save one application log
     @Transactional
     public Long store(LogIngestRequest request) {
 
-        // The Layer 1 boundary, enforced at the service rather than left to a
-        // convention the SDK happens to follow today.
+        // only application logs go to this table, audit has its own endpoint
         if (request.getEventType() != EventType.APPLICATION) {
             throw new UnsupportedEventTypeException(request.getEventType());
         }
 
+        // request -> row -> insert
         ApplicationLog saved = repository.save(mapper.toEntity(request));
 
         return saved.getId();
     }
 
-    /**
-     * Every line of one customer journey, oldest first.
-     *
-     * <p>Ordered by ingest time rather than event time: clocks across services
-     * drift, and a trace read in the wrong order is worse than useless during
-     * an incident.
-     */
+    // logs for one trace, oldest first
     @Transactional(readOnly = true)
     public List<ApplicationLog> findByTraceId(String traceId) {
         return repository.findByTraceId(traceId, Sort.by(Sort.Direction.ASC, "createdAt", "id"));
     }
 
+    // filtered, paged search
     @Transactional(readOnly = true)
     public Page<ApplicationLog> search(LogSearchCriteria criteria, Pageable pageable) {
         return repository.findAll(LogSpecifications.matching(criteria), pageable);

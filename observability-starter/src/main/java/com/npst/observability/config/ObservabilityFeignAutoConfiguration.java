@@ -10,15 +10,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 
-/**
- * Carries the correlation id across Feign calls.
- *
- * <p>The Spring Boot services in this platform call each other with OpenFeign,
- * so without this a trace stops at the first service-to-service hop and a
- * customer journey can no longer be reconstructed end to end. Applies only
- * when Feign is actually on the classpath, so nothing is imposed on a service
- * that does not use it.
- */
+// passes the trace id on Feign calls, only when Feign is on the classpath
 @AutoConfiguration
 @AutoConfigureAfter(ObservabilityAutoConfiguration.class)
 @ConditionalOnClass(RequestInterceptor.class)
@@ -35,6 +27,7 @@ public class ObservabilityFeignAutoConfiguration {
         String header = properties.getTrace().getHeader();
         String mdcKey = properties.getTrace().getMdcKey();
 
+        // add the header only if this request has a trace id
         return template -> {
             String traceId = MDC.get(mdcKey);
 

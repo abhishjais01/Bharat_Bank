@@ -22,14 +22,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Account services from the PRD, section 6.3.
- *
- * <p>Read the handlers and notice what is absent. No trace id, no bank code, no
- * service name, no timing, no try/catch that exists only to log, no masking
- * call. Each method expresses the banking operation; the annotation names it
- * and the platform records the rest.
- */
+// account endpoints: balance, summary, statement
 @RestController
 @RequestMapping("/api/v1/accounts")
 public class AccountController {
@@ -43,39 +36,30 @@ public class AccountController {
         this.maxStatementDays = maxStatementDays;
     }
 
-    /**
-     * The journey from the brief: customer taps Check Balance, sees Rs 82,450.
-     *
-     * <p>Not audited. A balance enquiry is an application log - auditing every
-     * read is how an audit trail turns into noise nobody can search.
-     */
+    // balance enquiry; logged but not audited
     @GetMapping("/{accountNumber}/balance")
     @LogRegistry(action = "BALANCE_ENQUIRY", module = "ACCOUNTS", entity = "ACCOUNT")
     public ResponseEntity<BalanceResponse> balance(
             @PathVariable String accountNumber,
             @RequestParam(required = false) String simulate) {
 
+        // ask the core banking system
         BigDecimal balance = cbs.fetchBalance(accountNumber, simulate);
 
         return ResponseEntity.ok(new BalanceResponse(accountNumber, balance, "INR"));
     }
 
-    /**
-     * US-07: savings, current, deposit and loan in one view.
-     *
-     * <p>Several CBS calls behind one customer action - which is exactly the
-     * shape a correlation id exists for. All of them appear under one trace.
-     */
+    // all accounts of the customer, one CBS call per account
     @GetMapping("/summary")
     @LogRegistry(action = "ACCOUNT_SUMMARY", module = "ACCOUNTS", entity = "CUSTOMER")
     public ResponseEntity<AccountSummaryResponse> summary(
             @RequestParam(required = false) String simulate) {
 
+        // customer id comes from the request header
         String customerId = RequestContext.customerId();
 
         List<Map<String, Object>> accounts = cbs.fetchAccounts(customerId, simulate);
 
-        // A second hop per account, so the fan-out is real rather than implied.
         accounts.forEach(account ->
                 cbs.fetchBalance(String.valueOf(account.get("accountNumber")), null));
 
@@ -83,15 +67,7 @@ public class AccountController {
                 new AccountSummaryResponse(customerId, accounts.size(), accounts));
     }
 
-    /**
-     * US-08: statement for a chosen period.
-     *
-     * <p>Two outcomes the PRD is explicit about, and they are logged
-     * differently. A period with no transactions is a successful empty
-     * statement, logged at INFO. A range wider than policy is a rejected
-     * request, logged at WARN through {@code warnOn} - not ERROR, because
-     * nothing is broken.
-     */
+    // statement for a date range; a too-long range is logged as WARN
     @GetMapping("/{accountNumber}/statement")
     @LogRegistry(action = "STATEMENT_DOWNLOAD", module = "ACCOUNTS", entity = "ACCOUNT",
             warnOn = InvalidStatementPeriodException.class)
@@ -101,6 +77,7 @@ public class AccountController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) String simulate) {
 
+        // reject ranges longer than the allowed maximum
         long days = ChronoUnit.DAYS.between(from, to);
 
         if (days > maxStatementDays) {
@@ -109,6 +86,7 @@ public class AccountController {
                             + maxStatementDays + " day maximum");
         }
 
+        // fetch the transactions from CBS
         List<Map<String, Object>> transactions =
                 cbs.fetchTransactions(accountNumber, from, to, simulate);
 

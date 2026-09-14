@@ -1,12 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
 
-    <!--
-        Console and rolling JSON file appenders come from the observability
-        starter, so every service on the platform produces the same log shape
-        for Promtail and Loki. Add service-specific appenders or logger levels
-        below the include.
-    -->
     <include resource="observability-logback.xml"/>
 
 </configuration>
